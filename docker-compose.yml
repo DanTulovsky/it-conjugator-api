@@ -1,0 +1,8 @@
+services:
+  it-conjugator-api:
+    image: it-conjugator-api
+    ports:
+      - "8000:8000"
+    environment:
+      - SCRAPER_API_KEY=${SCRAPER_API_KEY}
+    restart: unless-stopped
