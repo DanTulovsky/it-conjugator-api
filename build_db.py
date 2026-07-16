@@ -108,6 +108,10 @@ def extract_conjugations_and_metadata(entry):
         form_val = clean_accents(f.get("form", ""))
         if not form_val:
             continue
+
+        # Skip archaic, obsolete, literary, rare, and regional forms
+        if tags & {"archaic", "obsolete", "literary", "rare", "regional"}:
+            continue
             
         # Principal forms
         if "gerund" in tags:
@@ -120,49 +124,49 @@ def extract_conjugations_and_metadata(entry):
         # Indicativo Presente
         if "indicative" in tags and "present" in tags:
             for tag_set, person in PERSON_MAPPING:
-                if tag_set.issubset(tags):
+                if tag_set.issubset(tags) and person not in conjugations["indicativo"]["presente"]:
                     conjugations["indicativo"]["presente"][person] = form_val
                     has_conjugations = True
                     
         # Indicativo Imperfetto
         elif "indicative" in tags and "imperfect" in tags:
             for tag_set, person in PERSON_MAPPING:
-                if tag_set.issubset(tags):
+                if tag_set.issubset(tags) and person not in conjugations["indicativo"]["imperfetto"]:
                     conjugations["indicativo"]["imperfetto"][person] = form_val
                     has_conjugations = True
                     
         # Indicativo Passato Remoto
         elif "indicative" in tags and "historic" in tags and "past" in tags:
             for tag_set, person in PERSON_MAPPING:
-                if tag_set.issubset(tags):
+                if tag_set.issubset(tags) and person not in conjugations["indicativo"]["passato remoto"]:
                     conjugations["indicativo"]["passato remoto"][person] = form_val
                     has_conjugations = True
                     
         # Indicativo Futuro Semplice
         elif "indicative" in tags and "future" in tags:
             for tag_set, person in PERSON_MAPPING:
-                if tag_set.issubset(tags):
+                if tag_set.issubset(tags) and person not in conjugations["indicativo"]["futuro semplice"]:
                     conjugations["indicativo"]["futuro semplice"][person] = form_val
                     has_conjugations = True
                     
         # Congiuntivo Presente
         elif "subjunctive" in tags and "present" in tags:
             for tag_set, person in PERSON_MAPPING:
-                if tag_set.issubset(tags):
+                if tag_set.issubset(tags) and person not in conjugations["congiuntivo"]["presente"]:
                     conjugations["congiuntivo"]["presente"][person] = form_val
                     has_conjugations = True
                     
         # Congiuntivo Imperfetto
         elif "subjunctive" in tags and "imperfect" in tags:
             for tag_set, person in PERSON_MAPPING:
-                if tag_set.issubset(tags):
+                if tag_set.issubset(tags) and person not in conjugations["congiuntivo"]["imperfetto"]:
                     conjugations["congiuntivo"]["imperfetto"][person] = form_val
                     has_conjugations = True
                     
         # Condizionale Presente
         elif "conditional" in tags and "present" in tags or ("conditional" in tags and not any(t in tags for t in ["past", "perfect"])):
             for tag_set, person in PERSON_MAPPING:
-                if tag_set.issubset(tags):
+                if tag_set.issubset(tags) and person not in conjugations["condizionale"]["presente"]:
                     conjugations["condizionale"]["presente"][person] = form_val
                     has_conjugations = True
                     
@@ -172,20 +176,20 @@ def extract_conjugations_and_metadata(entry):
             
             # Map second person singular
             if "singular" in tags:
-                if "second-person" in tags and not is_formal:
+                if "second-person" in tags and not is_formal and "(tu)" not in conjugations["imperativo"]["presente"]:
                     conjugations["imperativo"]["presente"]["(tu)"] = form_val
                     has_conjugations = True
-                elif is_formal or "third-person" in tags:
+                elif (is_formal or "third-person" in tags) and "(Lei)" not in conjugations["imperativo"]["presente"]:
                     conjugations["imperativo"]["presente"]["(Lei)"] = form_val
                     has_conjugations = True
             elif "plural" in tags:
-                if "first-person" in tags:
+                if "first-person" in tags and "(noi)" not in conjugations["imperativo"]["presente"]:
                     conjugations["imperativo"]["presente"]["(noi)"] = form_val
                     has_conjugations = True
-                elif "second-person" in tags:
+                elif "second-person" in tags and "(voi)" not in conjugations["imperativo"]["presente"]:
                     conjugations["imperativo"]["presente"]["(voi)"] = form_val
                     has_conjugations = True
-                elif is_formal or "third-person" in tags:
+                elif (is_formal or "third-person" in tags) and "(Loro)" not in conjugations["imperativo"]["presente"]:
                     conjugations["imperativo"]["presente"]["(Loro)"] = form_val
                     has_conjugations = True
                     
@@ -224,10 +228,15 @@ def build_database():
     
     print("Database tables and indexes created successfully.")
     
-    headers = {"User-Agent": "Mozilla/5.0"}
-    req = urllib.request.Request(KAIKKI_URL, headers=headers)
-    
-    print(f"Streaming Wiktionary data from {KAIKKI_URL}...")
+    local_path = os.path.basename(KAIKKI_URL)
+    if os.path.exists(local_path):
+        print(f"Using local file: {local_path}")
+        reader = codecs.getreader("utf-8")(open(local_path, "rb"))
+    else:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        req = urllib.request.Request(KAIKKI_URL, headers=headers)
+        print(f"Streaming Wiktionary data from {KAIKKI_URL}...")
+        reader = codecs.getreader("utf-8")(urllib.request.urlopen(req))
     
     verbs_to_insert = []
     forms_to_insert = set()
@@ -237,96 +246,93 @@ def build_database():
     form_ref_count = 0
     
     try:
-        with urllib.request.urlopen(req) as response:
-            reader = codecs.getreader("utf-8")(response)
-            
-            for line in reader:
-                line_count += 1
-                if line_count % 50000 == 0:
-                    print(f"Processed {line_count} lines. Saved {verb_count} verbs...")
+        for line in reader:
+            line_count += 1
+            if line_count % 50000 == 0:
+                print(f"Processed {line_count} lines. Saved {verb_count} verbs...")
+                
+            try:
+                entry = json.loads(line)
+                if entry.get("pos") != "verb":
+                    continue
                     
-                try:
-                    entry = json.loads(line)
-                    if entry.get("pos") != "verb":
-                        continue
-                        
-                    word = clean_parentheses(clean_accents(entry.get("word", "")))
-                    if not word:
-                        continue
-                        
-                    # Extract conjugations first
-                    auxiliary, model, principal_forms, conjugations, has_conjugations = extract_conjugations_and_metadata(entry)
+                word = clean_parentheses(clean_accents(entry.get("word", "")))
+                if not word:
+                    continue
                     
-                    # Check if it's a form-of entry
-                    is_form_of = False
-                    form_of_verbs = []
-                    
-                    senses = entry.get("senses", [])
-                    for sense in senses:
-                        if "form_of" in sense:
-                            is_form_of = True
-                            for fo in sense["form_of"]:
-                                fword = clean_parentheses(clean_accents(fo.get("word")))
-                                if fword:
-                                    form_of_verbs.append(fword)
-                                    
-                    if "form_of" in entry:
+                # Extract conjugations first
+                auxiliary, model, principal_forms, conjugations, has_conjugations = extract_conjugations_and_metadata(entry)
+                
+                # Check if it's a form-of entry
+                is_form_of = False
+                form_of_verbs = []
+                
+                senses = entry.get("senses", [])
+                for sense in senses:
+                    if "form_of" in sense:
                         is_form_of = True
-                        for fo in entry["form_of"]:
+                        for fo in sense["form_of"]:
                             fword = clean_parentheses(clean_accents(fo.get("word")))
                             if fword:
                                 form_of_verbs.append(fword)
                                 
-                    if is_form_of and not has_conjugations:
-                        for fv in form_of_verbs:
-                            forms_to_insert.add((word, fv))
-                            form_ref_count += 1
-                        continue
-                        
-                    # Store verb as a main verb entry (compress JSONs with zlib)
-                    if has_conjugations or "head_templates" in entry:
-                        comp_conj = zlib.compress(json.dumps(conjugations, ensure_ascii=False).encode('utf-8'))
-                        comp_pf = zlib.compress(json.dumps(principal_forms, ensure_ascii=False).encode('utf-8'))
-                        
-                        verbs_to_insert.append((
-                            word,
-                            sqlite3.Binary(comp_conj),
-                            auxiliary,
-                            model,
-                            sqlite3.Binary(comp_pf)
-                        ))
-                        verb_count += 1
-                        
-                        forms_to_insert.add((word, word))
-                        for fv in form_of_verbs:
-                            forms_to_insert.add((word, fv))
-                        
-                        for f in entry.get("forms", []):
-                            if f.get("source") == "conjugation":
-                                fval = clean_accents(f.get("form"))
-                                if fval:
-                                    forms_to_insert.add((fval, word))
-                                    parts = fval.split()
-                                    if len(parts) > 1:
-                                        forms_to_insert.add((parts[-1], word))
-                                        
-                    # Write in batches of 1000
-                    if len(verbs_to_insert) >= 1000:
-                        cursor.executemany(
-                            "INSERT OR REPLACE INTO verbs VALUES (?, ?, ?, ?, ?)",
-                            verbs_to_insert
-                        )
-                        verbs_to_insert.clear()
-                        
-                        cursor.executemany(
-                            "INSERT OR IGNORE INTO forms VALUES (?, ?)",
-                            list(forms_to_insert)
-                        )
-                        forms_to_insert.clear()
-                        conn.commit()
-                        
-                except Exception as e:
-                    pass
+                if "form_of" in entry:
+                    is_form_of = True
+                    for fo in entry["form_of"]:
+                        fword = clean_parentheses(clean_accents(fo.get("word")))
+                        if fword:
+                            form_of_verbs.append(fword)
+                            
+                if is_form_of and not has_conjugations:
+                    for fv in form_of_verbs:
+                        forms_to_insert.add((word, fv))
+                        form_ref_count += 1
+                    continue
+                    
+                # Store verb as a main verb entry (compress JSONs with zlib)
+                if has_conjugations or "head_templates" in entry:
+                    comp_conj = zlib.compress(json.dumps(conjugations, ensure_ascii=False).encode('utf-8'))
+                    comp_pf = zlib.compress(json.dumps(principal_forms, ensure_ascii=False).encode('utf-8'))
+                    
+                    verbs_to_insert.append((
+                        word,
+                        sqlite3.Binary(comp_conj),
+                        auxiliary,
+                        model,
+                        sqlite3.Binary(comp_pf)
+                    ))
+                    verb_count += 1
+                    
+                    forms_to_insert.add((word, word))
+                    for fv in form_of_verbs:
+                        forms_to_insert.add((word, fv))
+                    
+                    for f in entry.get("forms", []):
+                        if f.get("source") == "conjugation":
+                            fval = clean_accents(f.get("form"))
+                            if fval:
+                                forms_to_insert.add((fval, word))
+                                parts = fval.split()
+                                if len(parts) > 1:
+                                    forms_to_insert.add((parts[-1], word))
+                                    
+                # Write in batches of 1000
+                if len(verbs_to_insert) >= 1000:
+                    cursor.executemany(
+                        "INSERT OR REPLACE INTO verbs VALUES (?, ?, ?, ?, ?)",
+                        verbs_to_insert
+                    )
+                    verbs_to_insert.clear()
+                    
+                    cursor.executemany(
+                        "INSERT OR IGNORE INTO forms VALUES (?, ?)",
+                        list(forms_to_insert)
+                    )
+                    forms_to_insert.clear()
+                    conn.commit()
+                    
+            except Exception as e:
+                pass
                     
     except Exception as e:
         print("Error during streaming:", e)
