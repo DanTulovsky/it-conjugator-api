@@ -1,0 +1,20 @@
+# Taskfile — https://taskfile.dev
+# Targets: build, test, run
+
+version: "3"
+
+tasks:
+  build:
+    desc: Build the Docker image (it-conjugator-api)
+    cmds:
+      - docker build -t it-conjugator-api .
+
+  test:
+    desc: Run the conjugation regression test suite (stdlib unittest)
+    cmds:
+      - python3 -m unittest discover -s tests -v
+
+  run:
+    desc: Build and (re)start the API via docker compose
+    cmds:
+      - docker compose up --build -d
