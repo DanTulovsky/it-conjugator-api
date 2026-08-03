@@ -59,6 +59,19 @@ NONSTANDARD_QUALIFIERS = (
 # (clauses with commas, quotes, etc.) means the expansion text was not parseable.
 PRINCIPAL_FORM_RE = re.compile(r"[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'\- ]*")
 
+# Curated past-participle corrections where Wiktionary's canonical order in the
+# head expansion ("X or Y") disagrees with standard usage. WordReference lists
+# only "espanso" for espandere (and its model follows: spandere); Wiktionary
+# lists "espànto" first. Keys are accent-cleaned infinitives.
+PAST_PARTICIPLE_OVERRIDES = {
+    "espandere": "espanso",
+    "espandersi": "espansosi",
+    "riespandere": "riespanso",
+    "rispandere": "rispanso",
+    "spandere": "spanso",
+    "spandersi": "spansosi",
+}
+
 
 def parse_head_expansion_principal_form(entry, phrase: str) -> str:
     """
@@ -268,6 +281,9 @@ def extract_conjugations_and_metadata(entry):
         principal_forms["participio passato"] = pp
     elif pp_candidates:
         principal_forms["participio passato"] = pp_candidates[0]
+    override = PAST_PARTICIPLE_OVERRIDES.get(word)
+    if override:
+        principal_forms["participio passato"] = override
         
     if gerund_candidates:
         principal_forms["gerundio"] = gerund_candidates[0]

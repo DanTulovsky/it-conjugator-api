@@ -56,6 +56,15 @@ docker build -t it-conjugator-api .
 docker run -p 8000:8000 it-conjugator-api
 ```
 
+### Tests
+The conjugation data is covered by a regression suite (`tests/test_conjugations.py`)
+that checks the auxiliary, past participle, and passato prossimo for ~120 verbs
+against hard-coded expected values. Run it from the repo root (no dependencies,
+uses the stdlib `unittest`):
+```bash
+python3 -m unittest discover -s tests -v
+```
+
 ---
 
 ## Data Attribution & Credits
