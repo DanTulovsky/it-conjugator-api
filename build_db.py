@@ -39,6 +39,62 @@ def clean_parentheses(s: str) -> str:
     s = re.sub(r"\s+", " ", s)
     return s.strip()
 
+# Tags marking a form as non-standard/alternative (archaic, dialectal, poetic, ...).
+# Such forms are excluded when extracting conjugations and principal forms.
+NONSTANDARD_TAGS = {
+    "archaic", "obsolete", "literary", "rare", "regional",
+    "poetic", "dialectal", "uncommon", "traditional"
+}
+
+# Qualifier words appearing inside parentheticals in the head template expansion
+# (e.g. "vìsto or (less popular) vedùto") that mark an alternative form as
+# non-standard, so it should not be chosen over an unqualified one.
+NONSTANDARD_QUALIFIERS = (
+    "archaic", "obsolete", "literary", "rare", "uncommon",
+    "less common", "less popular", "popular", "traditional",
+    "poetic", "regional", "dialectal", "informal"
+)
+
+# A principal form must look like a word (possibly multi-word); anything else
+# (clauses with commas, quotes, etc.) means the expansion text was not parseable.
+PRINCIPAL_FORM_RE = re.compile(r"[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'\- ]*")
+
+
+def parse_head_expansion_principal_form(entry, phrase: str) -> str:
+    """
+    Extract a canonical principal form from the head template expansion.
+
+    The it-verb head template states the canonical forms, e.g.:
+        "past participle vàlso"
+        "past participle vìsto or (less popular) vedùto"  -> 'visto'
+    Returns the first unqualified alternative, or None if not parseable.
+    """
+    for ht in entry.get("head_templates", []):
+        exp = ht.get("expansion", "")
+        m = re.search(
+            r"(?<!no\s)" + phrase + r"\s+(.+?)(?=,\s*(?:first-person|second-person|third-person|auxiliary)|$)",
+            exp
+        )
+        if not m:
+            continue
+        best = None
+        for part in re.split(r"\s+or\s+", m.group(1)):
+            qualifiers = re.findall(r"\(([^)]*)\)", part)
+            form = re.sub(r"\([^)]*\)", "", part).strip().rstrip(")")
+            if not PRINCIPAL_FORM_RE.fullmatch(form):
+                continue  # unparseable clause; fall back to table forms
+            is_nonstandard = any(
+                any(q in ql.lower() for q in NONSTANDARD_QUALIFIERS)
+                for ql in qualifiers
+            )
+            if not is_nonstandard:
+                return clean_accents(form)
+            if best is None:
+                best = clean_accents(form)
+        if best is not None:
+            return best
+    return None
+
 # Moods and tenses person mappings
 PERSON_MAPPING = [
     ({"first-person", "singular"}, "io"),
@@ -99,6 +155,14 @@ def extract_conjugations_and_metadata(entry):
     
     has_conjugations = False
     
+    # Collect candidates for principal forms; Wiktionary entries can contain
+    # several conjugation tables (main, "lesser-used forms", dialectal), and a
+    # later table may list non-standard variants with no qualifying tags, so the
+    # FIRST candidate wins rather than the last one seen.
+    gerund_candidates = []
+    pp_candidates = []
+    prespart_candidates = []
+
     # Parse each form from the conjugation template
     for f in forms:
         if f.get("source") != "conjugation":
@@ -106,20 +170,21 @@ def extract_conjugations_and_metadata(entry):
             
         tags = set(f.get("tags", []))
         form_val = clean_accents(f.get("form", ""))
-        if not form_val:
-            continue
-
-        # Skip archaic, obsolete, literary, rare, and regional forms
-        if tags & {"archaic", "obsolete", "literary", "rare", "regional"}:
+        if not form_val or form_val in ("-", "—"):
             continue
             
         # Principal forms
         if "gerund" in tags:
-            principal_forms["gerundio"] = form_val
+            gerund_candidates.append(form_val)
         elif "participle" in tags and "past" in tags:
-            principal_forms["participio passato"] = form_val
+            pp_candidates.append(form_val)
         elif "participle" in tags and "present" in tags:
-            principal_forms["participio presente"] = form_val
+            prespart_candidates.append(form_val)
+
+        # Skip archaic, obsolete, literary, rare, regional, poetic, dialectal,
+        # uncommon, and traditional forms
+        if tags & NONSTANDARD_TAGS:
+            continue
             
         # Indicativo Presente
         if "indicative" in tags and "present" in tags:
@@ -193,7 +258,56 @@ def extract_conjugations_and_metadata(entry):
                     conjugations["imperativo"]["presente"]["(Loro)"] = form_val
                     has_conjugations = True
                     
+    # Resolve principal forms: prefer the canonical form stated in the head
+    # template expansion (e.g. "past participle vàlso"), then the first table
+    # candidate. This prevents a dialectal/archaic variant from a later
+    # conjugation table (e.g. "valsùto") from overriding the standard form
+    # ("valso").
+    pp = parse_head_expansion_principal_form(entry, "past participle")
+    if pp:
+        principal_forms["participio passato"] = pp
+    elif pp_candidates:
+        principal_forms["participio passato"] = pp_candidates[0]
+        
+    if gerund_candidates:
+        principal_forms["gerundio"] = gerund_candidates[0]
+    if prespart_candidates:
+        principal_forms["participio presente"] = prespart_candidates[0]
+        
     return auxiliary, model, principal_forms, conjugations, has_conjugations
+
+def _entry_quality(entry, has_conjugations: bool) -> dict:
+    """
+    Rank a verb entry for deduplication. The dump can contain several entries
+    with the same infinitive (separate etymologies/sections, or a literary or
+    archaic homograph listed after the standard verb). Standard entries beat
+    non-standard (literary, archaic, ...) ones; among those, richer entries
+    (with a conjugation table, more senses) are preferred; full ties keep the
+    first entry encountered.
+    """
+    nonstandard = set()
+    for ht in entry.get("head_templates", []):
+        if ht.get("name") == "tlb":
+            for key, value in ht.get("args", {}).items():
+                if key != "1" and isinstance(value, str):
+                    nonstandard.add(value)
+    for sense in entry.get("senses", []):
+        nonstandard.update(sense.get("tags", []))
+    return {
+        "nonstandard": bool(nonstandard & NONSTANDARD_TAGS),
+        "has_conj": has_conjugations,
+        "nsenses": len(entry.get("senses", [])),
+    }
+
+
+def _is_better_verb_entry(new_meta: dict, old_meta: dict) -> bool:
+    if new_meta["nonstandard"] != old_meta["nonstandard"]:
+        return not new_meta["nonstandard"]
+    if new_meta["has_conj"] != old_meta["has_conj"]:
+        return new_meta["has_conj"]
+    if new_meta["nsenses"] != old_meta["nsenses"]:
+        return new_meta["nsenses"] > old_meta["nsenses"]
+    return False  # keep the first entry
 
 def build_database():
     # Remove existing DB if any to start fresh
@@ -238,7 +352,7 @@ def build_database():
         print(f"Streaming Wiktionary data from {KAIKKI_URL}...")
         reader = codecs.getreader("utf-8")(urllib.request.urlopen(req))
     
-    verbs_to_insert = []
+    verbs_best = {}   # infinitive -> (quality_meta, row_tuple); keeps the best entry per infinitive
     forms_to_insert = set()
     
     line_count = 0
@@ -289,18 +403,25 @@ def build_database():
                         form_ref_count += 1
                     continue
                     
-                # Store verb as a main verb entry (compress JSONs with zlib)
+                # Store verb as a main verb entry (compress JSONs with zlib).
+                # Multiple entries can share an infinitive (e.g. a literary or
+                # archaic homograph after the standard verb); keep the best one
+                # instead of letting the last entry overwrite earlier ones.
                 if has_conjugations or "head_templates" in entry:
                     comp_conj = zlib.compress(json.dumps(conjugations, ensure_ascii=False).encode('utf-8'))
                     comp_pf = zlib.compress(json.dumps(principal_forms, ensure_ascii=False).encode('utf-8'))
                     
-                    verbs_to_insert.append((
+                    row = (
                         word,
                         sqlite3.Binary(comp_conj),
                         auxiliary,
                         model,
                         sqlite3.Binary(comp_pf)
-                    ))
+                    )
+                    meta = _entry_quality(entry, has_conjugations)
+                    prev = verbs_best.get(word)
+                    if prev is None or _is_better_verb_entry(meta, prev[0]):
+                        verbs_best[word] = (meta, row)
                     verb_count += 1
                     
                     forms_to_insert.add((word, word))
@@ -317,12 +438,12 @@ def build_database():
                                     forms_to_insert.add((parts[-1], word))
                                     
                 # Write in batches of 1000
-                if len(verbs_to_insert) >= 1000:
+                if len(verbs_best) >= 1000:
                     cursor.executemany(
                         "INSERT OR REPLACE INTO verbs VALUES (?, ?, ?, ?, ?)",
-                        verbs_to_insert
+                        [r for _, r in verbs_best.values()]
                     )
-                    verbs_to_insert.clear()
+                    verbs_best.clear()
                     
                     cursor.executemany(
                         "INSERT OR IGNORE INTO forms VALUES (?, ?)",
@@ -340,10 +461,10 @@ def build_database():
         sys.exit(1)
         
     # Flush remaining batch
-    if verbs_to_insert:
+    if verbs_best:
         cursor.executemany(
             "INSERT OR REPLACE INTO verbs VALUES (?, ?, ?, ?, ?)",
-            verbs_to_insert
+            [r for _, r in verbs_best.values()]
         )
     if forms_to_insert:
         cursor.executemany(
