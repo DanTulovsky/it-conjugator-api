@@ -1,0 +1,14 @@
+# Keep the Docker build context small and the image reproducible.
+# The 761 MB Kaikki dump is only used at build time (locally), never inside the image.
+.git
+.gitignore
+.reasonix
+__pycache__
+**/__pycache__
+*.pyc
+tests
+data/kaikki.org-dictionary-Italian.jsonl
+**/kaikki*.jsonl
+*.db-wal
+*.db-shm
+README.md

@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import List, Optional, Literal, Dict, Any
-from pydantic import BaseModel, Field, ValidationError, constr
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, constr
 
 # ---- Literals: exactly what we scrape from WR ----
 Mood = Literal[
@@ -51,3 +51,49 @@ class APIResponse(BaseModel):
     note: Optional[str] = None
     error: Optional[str] = None
     data: Optional[ConjugationResponse] = None
+
+# ---- Dictionary (/define) models ----
+class SenseModel(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    glosses: Optional[List[str]] = None
+    raw_glosses: Optional[List[str]] = None
+    tags: Optional[List[str]] = None
+    form_of: Optional[List[Any]] = None
+    examples: Optional[List[Any]] = None
+    synonyms: Optional[List[Any]] = None
+    antonyms: Optional[List[Any]] = None
+
+class FormModel(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    form: str
+    tags: Optional[List[str]] = None
+
+class DictionaryEntry(BaseModel):
+    """One Wiktionary entry (word + part of speech + etymology section)."""
+    model_config = ConfigDict(extra="allow")
+    word: str
+    pos: Optional[str] = None
+    etymology_number: Optional[str] = None
+    is_lemma: bool = False
+    head: Optional[List[str]] = None
+    etymology: Optional[str] = None
+    ipa: Optional[List[str]] = None
+    rhymes: Optional[List[str]] = None
+    hyphenation: Optional[List[str]] = None
+    senses: Optional[List[SenseModel]] = None
+    forms: Optional[List[FormModel]] = None
+
+class DefinitionResponse(BaseModel):
+    queried: str
+    entries: List[DictionaryEntry]
+
+class DefineResponse(BaseModel):
+    success: bool
+    requested: Optional[str] = None
+    note: Optional[str] = None
+    error: Optional[str] = None
+    data: Optional[DefinitionResponse] = None
+
+class HealthResponse(BaseModel):
+    ok: bool
+    databases: Dict[str, bool] = Field(..., description="Presence of each required SQLite database")

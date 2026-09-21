@@ -1,5 +1,18 @@
 from __future__ import annotations
 
+import os
+
+# Absolute paths to the on-disk data (SQLite databases + source dump) that must
+# be built/downloaded before the API runs.
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR = os.path.join(ROOT_DIR, "data")
+VERBS_DB_PATH = os.path.join(DATA_DIR, "verbs.db")
+DICTIONARY_DB_PATH = os.path.join(DATA_DIR, "dictionary.db")
+# Local copy of the Kaikki Italian Wiktionary dump (downloaded on first build).
+KAIKKI_JSONL_PATH = os.path.join(DATA_DIR, "kaikki.org-dictionary-Italian.jsonl")
+# Checked-in OpenAPI contract (regenerate with `task swagger`).
+SWAGGER_PATH = os.path.join(ROOT_DIR, "swagger.json")
+
 
 HOMEPAGE_URL = "https://www.wordreference.com/"
 BASE = "https://www.wordreference.com/conj/itverbs.aspx"

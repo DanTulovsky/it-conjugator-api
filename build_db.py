@@ -11,8 +11,12 @@ import zlib
 if sys.stdout.encoding != 'utf-8':
     sys.stdout.reconfigure(encoding='utf-8')
 
-DB_PATH = "verbs.db"
+ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(ROOT_DIR, "data")
+DB_PATH = os.path.join(DATA_DIR, "verbs.db")
 KAIKKI_URL = "https://kaikki.org/dictionary/Italian/kaikki.org-dictionary-Italian.jsonl"
+# Local dump location (downloaded here on first build).
+LOCAL_DUMP_PATH = os.path.join(DATA_DIR, os.path.basename(KAIKKI_URL))
 
 VOWELS_MAP = {
     'à': 'a', 'á': 'a', 'è': 'e', 'é': 'e', 'ì': 'i', 'í': 'i', 'ò': 'o', 'ó': 'o', 'ù': 'u', 'ú': 'u',
@@ -326,6 +330,9 @@ def _is_better_verb_entry(new_meta: dict, old_meta: dict) -> bool:
     return False  # keep the first entry
 
 def build_database():
+    # Ensure the data directory exists
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+
     # Remove existing DB if any to start fresh
     if os.path.exists(DB_PATH):
         os.remove(DB_PATH)
@@ -358,10 +365,9 @@ def build_database():
     
     print("Database tables and indexes created successfully.")
     
-    local_path = os.path.basename(KAIKKI_URL)
-    if os.path.exists(local_path):
-        print(f"Using local file: {local_path}")
-        reader = codecs.getreader("utf-8")(open(local_path, "rb"))
+    if os.path.exists(LOCAL_DUMP_PATH):
+        print(f"Using local file: {LOCAL_DUMP_PATH}")
+        reader = codecs.getreader("utf-8")(open(LOCAL_DUMP_PATH, "rb"))
     else:
         headers = {"User-Agent": "Mozilla/5.0"}
         req = urllib.request.Request(KAIKKI_URL, headers=headers)

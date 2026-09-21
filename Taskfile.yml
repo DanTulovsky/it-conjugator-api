@@ -1,20 +1,56 @@
 # Taskfile — https://taskfile.dev
-# Targets: build, test, run
+# Targets: db, db:verbs, db:dictionary, test, build, run
 
 version: "3"
 
 tasks:
-  build:
-    desc: Build the Docker image (it-conjugator-api)
+  db:
+    desc: Build all local SQLite databases (verbs.db + dictionary.db)
+    deps: [db:verbs, db:dictionary]
+
+  db:verbs:
+    desc: Build the conjugation database (verbs.db) from the Kaikki Italian dump
     cmds:
-      - docker build -t it-conjugator-api .
+      - python3 build_db.py
+    sources:
+      - build_db.py
+    generates:
+      - data/verbs.db
+
+  db:dictionary:
+    desc: Build the full dictionary database (dictionary.db) from the Kaikki Italian dump
+    cmds:
+      - python3 build_dictionary_db.py
+    sources:
+      - build_dictionary_db.py
+    generates:
+      - data/dictionary.db
 
   test:
-    desc: Run the conjugation regression test suite (stdlib unittest)
+    desc: Run the regression test suite (stdlib unittest)
+    deps: [db]
     cmds:
       - python3 -m unittest discover -s tests -v
 
+  swagger:
+    desc: Regenerate swagger.json (the OpenAPI contract) from the FastAPI app
+    cmds:
+      - python3 dump_openapi.py
+    sources:
+      - app/api.py
+      - app/models.py
+      - dump_openapi.py
+    generates:
+      - swagger.json
+
+  build:
+    desc: Build the Docker image (it-conjugator-api); requires the databases
+    deps: [db]
+    cmds:
+      - docker build -t it-conjugator-api .
+
   run:
     desc: Build and (re)start the API via docker compose
+    deps: [db, build]
     cmds:
       - docker compose up --build -d

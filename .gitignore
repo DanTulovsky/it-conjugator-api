@@ -218,3 +218,11 @@ __marimo__/
 .streamlit/secrets.toml
 kaikki.org-dictionary-Italian.jsonl
 .reasonix/
+
+# Local data dir: built SQLite databases + the downloaded source dump.
+*.db
+*.db-wal
+*.db-shm
+
+# Task runner checksum cache
+.task/

@@ -10,7 +10,10 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app/ app/
-COPY verbs.db .
+# Databases are built locally (`task db`) and are not stored in git.
+COPY data/verbs.db data/dictionary.db ./data/
+# OpenAPI contract (regenerate with `task swagger`); startup checks it is in sync.
+COPY swagger.json .
 
 EXPOSE 8000
 CMD ["python", "-m", "uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8000"]

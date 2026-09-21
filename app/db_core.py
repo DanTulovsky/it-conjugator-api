@@ -4,7 +4,9 @@ import sqlite3
 import zlib
 from typing import Dict, Any, Optional
 
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "verbs.db")
+from .config import VERBS_DB_PATH
+
+DB_PATH = VERBS_DB_PATH
 
 VOWELS_MAP = {
     'à': 'a', 'á': 'a', 'è': 'e', 'é': 'e', 'ì': 'i', 'í': 'i', 'ò': 'o', 'ó': 'o', 'ù': 'u', 'ú': 'u',

@@ -1,0 +1,836 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "WR Italian Conjugation API",
+    "version": "0.4.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "meta"
+        ],
+        "summary": "Liveness and database status",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/conjugate": {
+      "get": {
+        "tags": [
+          "conjugations"
+        ],
+        "summary": "Conjugate an Italian verb",
+        "description": "Return the conjugation table for a verb (infinitives and inflected forms).\n\nAccepts infinitives (``mangiare``) and inflected/pronominal forms\n(``mi arrabbio``), which are resolved back to their infinitive.",
+        "operationId": "conjugate_conjugate_get",
+        "security": [
+          {
+            "X-API-Key": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "v",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Italian verb (infinitive)",
+              "title": "V"
+            },
+            "description": "Italian verb (infinitive)"
+          },
+          {
+            "name": "full",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "If true, return full JSON and ignore filters",
+              "default": true,
+              "title": "Full"
+            },
+            "description": "If true, return full JSON and ignore filters"
+          },
+          {
+            "name": "moods",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "CSV moods (Literal): indicativo,tempi composti,congiuntivo,condizionale,imperativo",
+              "title": "Moods"
+            },
+            "description": "CSV moods (Literal): indicativo,tempi composti,congiuntivo,condizionale,imperativo"
+          },
+          {
+            "name": "tenses",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "CSV tenses (Literal)",
+              "title": "Tenses"
+            },
+            "description": "CSV tenses (Literal)"
+          },
+          {
+            "name": "persons",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "CSV persons (Literal)",
+              "title": "Persons"
+            },
+            "description": "CSV persons (Literal)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or missing X-API-Key"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/define": {
+      "get": {
+        "tags": [
+          "dictionary"
+        ],
+        "summary": "Look up an Italian word in the dictionary",
+        "description": "Full offline dictionary lookup: senses/glosses, tags, IPA, etymology and inflections.\n\nReturns every entry for the word across all parts of speech. An unknown word\nyields HTTP 200 with ``success: false``.",
+        "operationId": "define_define_get",
+        "security": [
+          {
+            "X-API-Key": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "v",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Italian word to look up",
+              "title": "V"
+            },
+            "description": "Italian word to look up"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DefineResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or missing X-API-Key"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "APIResponse": {
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "title": "Success"
+          },
+          "requested": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConjugateQuery"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConjugationResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "success"
+        ],
+        "title": "APIResponse"
+      },
+      "ConjugateQuery": {
+        "properties": {
+          "v": {
+            "type": "string",
+            "minLength": 1,
+            "title": "V",
+            "description": "Italian verb (infinitive)"
+          },
+          "full": {
+            "type": "boolean",
+            "title": "Full",
+            "description": "If true, return full JSON and ignore filters",
+            "default": true
+          },
+          "moods": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "indicativo",
+                    "tempi composti",
+                    "congiuntivo",
+                    "condizionale",
+                    "imperativo"
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Moods",
+            "description": "Allowed: indicativo, tempi composti, congiuntivo, condizionale, imperativo"
+          },
+          "tenses": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "presente",
+                    "imperfetto",
+                    "passato remoto",
+                    "futuro semplice",
+                    "passato prossimo",
+                    "trapassato prossimo",
+                    "trapassato remoto",
+                    "futuro anteriore",
+                    "passato",
+                    "trapassato"
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tenses",
+            "description": "Allowed: presente, imperfetto, passato remoto, futuro semplice, passato prossimo, trapassato prossimo, trapassato remoto, futuro anteriore, passato, trapassato"
+          },
+          "persons": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "",
+                    "(tu)",
+                    "(Lei)",
+                    "(noi)",
+                    "(voi)",
+                    "(Loro)",
+                    "io",
+                    "tu",
+                    "lui, lei, Lei, egli",
+                    "noi",
+                    "voi",
+                    "loro, Loro, essi"
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Persons",
+            "description": "Allowed: io/tu/... or '', (tu), (Lei), (noi), (voi), (Loro)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "v"
+        ],
+        "title": "ConjugateQuery"
+      },
+      "ConjugationResponse": {
+        "properties": {
+          "queried": {
+            "type": "string",
+            "title": "Queried"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "principal_forms": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Principal Forms"
+          },
+          "auxiliary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auxiliary"
+          },
+          "conjugations": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "type": "object"
+            },
+            "type": "object",
+            "title": "Conjugations"
+          }
+        },
+        "type": "object",
+        "required": [
+          "queried",
+          "url",
+          "principal_forms",
+          "conjugations"
+        ],
+        "title": "ConjugationResponse"
+      },
+      "DefineResponse": {
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "title": "Success"
+          },
+          "requested": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DefinitionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "success"
+        ],
+        "title": "DefineResponse"
+      },
+      "DefinitionResponse": {
+        "properties": {
+          "queried": {
+            "type": "string",
+            "title": "Queried"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/DictionaryEntry"
+            },
+            "type": "array",
+            "title": "Entries"
+          }
+        },
+        "type": "object",
+        "required": [
+          "queried",
+          "entries"
+        ],
+        "title": "DefinitionResponse"
+      },
+      "DictionaryEntry": {
+        "properties": {
+          "word": {
+            "type": "string",
+            "title": "Word"
+          },
+          "pos": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pos"
+          },
+          "etymology_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Etymology Number"
+          },
+          "is_lemma": {
+            "type": "boolean",
+            "title": "Is Lemma",
+            "default": false
+          },
+          "head": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head"
+          },
+          "etymology": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Etymology"
+          },
+          "ipa": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ipa"
+          },
+          "rhymes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rhymes"
+          },
+          "hyphenation": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hyphenation"
+          },
+          "senses": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/SenseModel"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Senses"
+          },
+          "forms": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/FormModel"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Forms"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "word"
+        ],
+        "title": "DictionaryEntry",
+        "description": "One Wiktionary entry (word + part of speech + etymology section)."
+      },
+      "FormModel": {
+        "properties": {
+          "form": {
+            "type": "string",
+            "title": "Form"
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tags"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "form"
+        ],
+        "title": "FormModel"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HealthResponse": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "databases": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "type": "object",
+            "title": "Databases",
+            "description": "Presence of each required SQLite database"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ok",
+          "databases"
+        ],
+        "title": "HealthResponse"
+      },
+      "SenseModel": {
+        "properties": {
+          "glosses": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Glosses"
+          },
+          "raw_glosses": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Raw Glosses"
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tags"
+          },
+          "form_of": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Form Of"
+          },
+          "examples": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Examples"
+          },
+          "synonyms": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Synonyms"
+          },
+          "antonyms": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Antonyms"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "title": "SenseModel"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    },
+    "securitySchemes": {
+      "X-API-Key": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key"
+      }
+    }
+  }
+}
