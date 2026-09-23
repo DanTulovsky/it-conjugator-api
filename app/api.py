@@ -1,28 +1,34 @@
 from __future__ import annotations
+
 import json
 import os
 from contextlib import asynccontextmanager
-from fastapi import HTTPException
-from typing import Optional
-from fastapi import FastAPI, Query, Security
+
+from fastapi import FastAPI, HTTPException, Query, Security
 from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 from pydantic import ValidationError
 
-from .config import VERBS_DB_PATH, DICTIONARY_DB_PATH, SWAGGER_PATH
+from .config import DICTIONARY_DB_PATH, SWAGGER_PATH, VERBS_DB_PATH
 from .db_core import get_conjugations
 from .dictionary_core import get_definitions
-from .filters import apply_filters
+from .filters import _split_csv_preserving_phrases, apply_filters
 from .models import (
-    ConjugateQuery, APIResponse, ConjugationResponse, Mood, Tense, Person,
-    DefineResponse, DefinitionResponse, HealthResponse,
+    APIResponse,
+    ConjugateQuery,
+    ConjugationResponse,
+    DefineResponse,
+    DefinitionResponse,
+    HealthResponse,
 )
 
 API_KEY = os.getenv("SCRAPER_API_KEY")  # set via Docker env
 
 # Documented as an OpenAPI apiKey security scheme. auto_error=False so the
 # endpoints keep returning their own 401 with a consistent body.
-api_key_header = APIKeyHeader(name="X-API-Key", scheme_name="X-API-Key", auto_error=False)
+api_key_header = APIKeyHeader(
+    name="X-API-Key", scheme_name="X-API-Key", auto_error=False
+)
 
 REQUIRED_DATABASES = {
     "conjugations (verbs.db)": VERBS_DB_PATH,
@@ -31,10 +37,14 @@ REQUIRED_DATABASES = {
 
 
 def _missing_databases() -> list[tuple[str, str]]:
-    return [(label, path) for label, path in REQUIRED_DATABASES.items() if not os.path.exists(path)]
+    return [
+        (label, path)
+        for label, path in REQUIRED_DATABASES.items()
+        if not os.path.exists(path)
+    ]
 
 
-def _contract_problem() -> Optional[str]:
+def _contract_problem() -> str | None:
     """Return a message if swagger.json is missing, unreadable, or out of date.
 
     The served contract is still generated live from the app; this only guards
@@ -86,17 +96,27 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="WR Italian Conjugation API", version="0.4.0", lifespan=lifespan)
 
-@app.get("/health", response_model=HealthResponse, tags=["meta"], summary="Liveness and database status")
+
+@app.get(
+    "/health",
+    response_model=HealthResponse,
+    tags=["meta"],
+    summary="Liveness and database status",
+)
 def health() -> HealthResponse:
     return HealthResponse(
         ok=True,
-        databases={label: os.path.exists(path) for label, path in REQUIRED_DATABASES.items()},
+        databases={
+            label: os.path.exists(path) for label, path in REQUIRED_DATABASES.items()
+        },
     )
 
-def _csv_to_list(s: Optional[str]) -> Optional[list[str]]:
+
+def _csv_to_list(s: str | None) -> list[str] | None:
     if not s:
         return None
-    return [part.strip() for part in s.split(",") if part.strip()]
+    return _split_csv_preserving_phrases(s)
+
 
 @app.get(
     "/conjugate",
@@ -107,11 +127,16 @@ def _csv_to_list(s: Optional[str]) -> Optional[list[str]]:
 )
 def conjugate(
     v: str = Query(..., min_length=1, description="Italian verb (infinitive)"),
-    full: bool = Query(True, description="If true, return full JSON and ignore filters"),
-    moods: Optional[str] = Query(None, description="CSV moods (Literal): indicativo,tempi composti,congiuntivo,condizionale,imperativo"),
-    tenses: Optional[str] = Query(None, description="CSV tenses (Literal)"),
-    persons: Optional[str] = Query(None, description="CSV persons (Literal)"),
-    api_key: Optional[str] = Security(api_key_header),
+    full: bool = Query(
+        True, description="If true, return full JSON and ignore filters"
+    ),
+    moods: str | None = Query(
+        None,
+        description="CSV moods (Literal): indicativo,tempi composti,congiuntivo,condizionale,imperativo",
+    ),
+    tenses: str | None = Query(None, description="CSV tenses (Literal)"),
+    persons: str | None = Query(None, description="CSV persons (Literal)"),
+    api_key: str | None = Security(api_key_header),
 ):
     """Return the conjugation table for a verb (infinitives and inflected forms).
 
@@ -136,19 +161,19 @@ def conjugate(
     except ValidationError as ve:
         return JSONResponse(
             status_code=400,
-            content=APIResponse(success=False, error=ve.errors()[0]["msg"]).model_dump()
+            content=APIResponse(
+                success=False, error=ve.errors()[0]["msg"]
+            ).model_dump(),
         )
 
     try:
         data = get_conjugations(req.v)
         if not data or not data.get("conjugations"):
-            return APIResponse(success=False, error="Verb not found in offline database", requested=req)
+            return APIResponse(
+                success=False, error="Verb not found in offline database", requested=req
+            )
 
-        filtered = apply_filters(data,
-                                 ",".join(req.moods) if req.moods else None,
-                                 ",".join(req.tenses) if req.tenses else None,
-                                 ",".join(req.persons) if req.persons else None,
-                                 req.full)
+        filtered = apply_filters(data, req.moods, req.tenses, req.persons, req.full)
 
         if not filtered.get("conjugations"):
             return APIResponse(
@@ -158,10 +183,13 @@ def conjugate(
                 data=ConjugationResponse(**filtered),
             )
 
-        return APIResponse(success=True, requested=req, data=ConjugationResponse(**filtered))
+        return APIResponse(
+            success=True, requested=req, data=ConjugationResponse(**filtered)
+        )
 
     except Exception as e:
         return APIResponse(success=False, error=str(e), requested=req)
+
 
 @app.get(
     "/define",
@@ -172,7 +200,7 @@ def conjugate(
 )
 def define(
     v: str = Query(..., min_length=1, description="Italian word to look up"),
-    api_key: Optional[str] = Security(api_key_header),
+    api_key: str | None = Security(api_key_header),
 ):
     """Full offline dictionary lookup: senses/glosses, tags, IPA, etymology and inflections.
 
@@ -186,16 +214,23 @@ def define(
     if not query:
         return JSONResponse(
             status_code=400,
-            content=DefineResponse(success=False, error="Parameter 'v' must not be empty.").model_dump(),
+            content=DefineResponse(
+                success=False, error="Parameter 'v' must not be empty."
+            ).model_dump(),
         )
 
     try:
         data = get_definitions(query)
         if not data or not data.get("entries"):
-            return DefineResponse(success=False, error="Word not found in offline dictionary", requested=query)
+            return DefineResponse(
+                success=False,
+                error="Word not found in offline dictionary",
+                requested=query,
+            )
 
-        return DefineResponse(success=True, requested=query, data=DefinitionResponse(**data))
+        return DefineResponse(
+            success=True, requested=query, data=DefinitionResponse(**data)
+        )
 
     except Exception as e:
         return DefineResponse(success=False, error=str(e), requested=query)
-

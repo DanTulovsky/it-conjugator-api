@@ -338,7 +338,14 @@
                     "lui, lei, Lei, egli",
                     "noi",
                     "voi",
-                    "loro, Loro, essi"
+                    "loro, Loro, essi",
+                    "lui",
+                    "lei",
+                    "Lei",
+                    "egli",
+                    "loro",
+                    "Loro",
+                    "essi"
                   ]
                 },
                 "type": "array"
