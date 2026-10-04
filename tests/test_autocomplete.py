@@ -60,15 +60,17 @@ def _ranked_index():
     """A tiny index whose verb bucket really is split canonical / inflected.
 
     ``mangiare`` and ``mancare`` are the canonical (infinitive) verbs; ``mangi``,
-    ``mangia``, ``mangiai`` and ``mangiammo`` are inflected forms that sort
-    *before* ``mangiare`` alphabetically — so canonical-first ordering is
-    observable rather than accidental.
+    ``mangia``, ``mangiai``, ``mangiammo`` and ``mancai`` are inflected forms.
+    ``mangi``/``mangia``/``mangiai``/``mangiammo`` sort *before* ``mangiare``
+    alphabetically, so canonical-first ordering is observable rather than
+    accidental — and ``mancai`` shares the ``manc`` prefix of a canonical verb in
+    a *different* POS, which exercises the multi-POS merge.
     """
     return Index(
         buckets={
             "verb": (
                 sorted(["mangiare", "mancare"]),
-                sorted(["mangi", "mangia", "mangiai", "mangiammo"]),
+                sorted(["mangi", "mangia", "mangiai", "mangiammo", "mancai"]),
             ),
             "noun": (sorted(["mancanza"]), []),
         },
@@ -103,9 +105,10 @@ class TestCanonicalForm(unittest.TestCase):
 
     def test_canonical_precedes_inflected_across_a_multi_pos_merge(self):
         # Both `mancanza` (noun) and `mancare` (verb) are canonical, so they are
-        # merged alphabetically ahead of anything inflected.
-        self.assertEqual(self.index.complete("manc"), ["mancanza", "mancare"])
-        self.assertEqual(self.index.complete("manc", pos=["verb"]), ["mancare"])
+        # merged alphabetically ahead of the inflected `mancai` — even though
+        # `mancai` sorts between them alphabetically.
+        self.assertEqual(self.index.complete("manc"), ["mancanza", "mancare", "mancai"])
+        self.assertEqual(self.index.complete("manc", pos=["verb"]), ["mancare", "mancai"])
 
     def test_substring_respects_canonical_first(self):
         self.assertEqual(
@@ -118,7 +121,7 @@ class TestCanonicalForm(unittest.TestCase):
         self.assertEqual(index.complete("cane"), ["cane"])
 
     def test_count_and_pos_values_span_both_halves(self):
-        self.assertEqual(self.index.count(), 7)
+        self.assertEqual(self.index.count(), 8)
         self.assertEqual(self.index.pos_values(), ["noun", "verb"])
 
     def test_non_verb_buckets_are_not_split(self):
@@ -132,20 +135,31 @@ class TestIsCanonical(unittest.TestCase):
         for key in ("mangiare", "credere", "finire", "porre", "tradurre", "narrare"):
             self.assertTrue(_is_canonical("verb", key, True), key)
 
+    def test_reflexive_infinitives_are_canonical(self):
+        # For inherently-pronominal verbs the reflexive IS the dictionary form,
+        # so it must be boosted; otherwise `pentirsi` sat outside a default
+        # limit for the prefix `pentir`.
+        for key in ("pentirsi", "accorgersi", "suicidarsi", "mettersi", "lavarsi"):
+            self.assertTrue(_is_canonical("verb", key, True), key)
+
     def test_verb_inflected_forms_are_not_canonical(self):
         for key in ("mangiai", "mangiammo", "mangiato", "mangiando", "cane"):
             self.assertFalse(_is_canonical("verb", key, True), key)
 
-    def test_pronominal_verbs_are_lemmas_but_not_canonical(self):
+    def test_clitic_and_gerund_lemmas_are_not_canonical(self):
         # The finding that made `is_lemma`-first ordering useless: Wiktionary
-        # marks these as lemmas, yet none of them is an infinitive.
-        for key in ("abbacchiarsi", "mangiarla", "abbacchiandoci", "mangiamole"):
+        # marks these as lemmas, yet none is the infinitive a picker keys on.
+        for key in ("mangiarla", "mangiamole", "abbacchiandoci", "mangiandosi"):
             self.assertFalse(_is_canonical("verb", key, True), key)
-        # ...while a real infinitive with the same shape is canonical.
+        # ...while real infinitives, plain and reflexive, are canonical.
         self.assertTrue(_is_canonical("verb", "mangiare", True))
+        self.assertTrue(_is_canonical("verb", "mangiarsi", True))
 
     def test_a_non_lemma_verb_key_is_never_canonical(self):
         self.assertFalse(_is_canonical("verb", "mangiare", False))
+        # `apersi` is passato remoto of `aprire`; it shares the `-ersi` ending
+        # with real reflexives, and only the lemma flag keeps it out.
+        self.assertFalse(_is_canonical("verb", "apersi", False))
 
     def test_other_parts_of_speech_are_all_canonical(self):
         for pos in ("noun", "adj", "adv", "name"):
@@ -420,6 +434,20 @@ class TestCompleteEndpoint(unittest.TestCase):
         # The narrower prefix puts it first outright.
         tight = api.complete(q="mangi", pos="verb", limit=5, api_key=api.API_KEY)
         self.assertEqual(tight.data.matches[0], "mangiare")
+
+    @unittest.skipUnless(REPO_HAS_DICTIONARY, "dictionary.db not built — run `task db:dictionary`")
+    def test_reflexive_infinitives_surface_too(self):
+        # For inherently-pronominal verbs the reflexive is the dictionary form.
+        # Without the `-si` endings `pentirsi` and `accorgersi` sat 16th-18th of
+        # ~20, and `mettersi` was outside the window entirely.
+        for verb, prefix in (
+            ("pentirsi", "pentir"),
+            ("accorgersi", "accorger"),
+            ("mettersi", "metter"),
+            ("lavarsi", "lavar"),
+        ):
+            matches = api.complete(q=prefix, pos="verb", limit=20, api_key=api.API_KEY)
+            self.assertIn(verb, matches.data.matches, f"{verb} missing for {prefix}")
 
     @unittest.skipUnless(REPO_HAS_DICTIONARY, "dictionary.db not built — run `task db:dictionary`")
     def test_inflected_verb_forms_are_still_reachable(self):

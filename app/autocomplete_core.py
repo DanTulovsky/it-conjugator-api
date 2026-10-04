@@ -56,18 +56,32 @@ def fold(word: str) -> str:
 
 
 #: Italian infinitive endings. Used to decide a verb's canonical form.
-INFINITIVE_ENDINGS = ("are", "ere", "ire", "arre", "erre", "orre", "urre")
+#:
+#: The `-si` reflexives are included because for inherently-pronominal verbs
+#: (`pentirsi`, `accorgersi`, `suicidarsi`, `mettersi`) the reflexive *is* the
+#: dictionary form — without them those verbs sat outside a default `limit` for
+#: their own prefix. The attachments that mark a non-infinitive (`mangiarla`,
+#: `abbacchiandoci`) are deliberately absent, so they stay in the inflected half.
+INFINITIVE_ENDINGS = (
+    "are", "ere", "ire", "arre", "erre", "orre", "urre",
+    "arsi", "ersi", "irsi",
+)
 
 
 def _is_canonical(pos: str, folded_key: str, is_lemma: bool) -> bool:
     """Whether ``folded_key`` is the canonical form a client should be offered first.
 
-    For verbs that means the infinitive. ``is_lemma`` alone is NOT enough:
-    Wiktionary gives pronominal and clitic verbs their own entries, so it flags
-    ~48,000 verb keys as lemmas — only about a fifth of which are infinitives
-    (``abbacchiarsi``, ``mangiarla`` and ``abbacchiandoci`` are all "lemmas").
-    Requiring the infinitive ending is what actually lifts ``mangiare`` to the
-    top of a ``mang`` completion.
+    For verbs that means the infinitive, plain or reflexive. ``is_lemma`` alone
+    is NOT enough: Wiktionary gives gerunds and clitic-object verbs their own
+    entries, so it flags ~48,000 verb keys as lemmas — only about a quarter of
+    which are infinitives (``abbacchiandoci``, ``mangiarla`` and ``mangiamole``
+    are all "lemmas" but none is an infinitive). Requiring an infinitive ending
+    is what actually lifts ``mangiare`` to the top of a ``mang`` completion.
+
+    ``is_lemma`` is still required as a gate, and it earns its place: it excludes
+    non-infinitive keys that happen to share an ending (``apersi``, passato remoto
+    of ``aprire``). The cost is the 132 reflexive keys Wiktionary marks as pure
+    forms rather than lemmas — ``ricordarsi`` among them — which stay unboosted.
 
     Every other part of speech is left unsplit — they keep plain alphabetical
     order — because only verbs have a canonical form a client must be able to
@@ -283,7 +297,7 @@ _build_ms: int | None = None
 def ensure_index() -> Index:
     """Return the process-wide index, building it on first use.
 
-    Called eagerly from the API lifespan so the cost (~0.65 s, ~115 MB on the
+    Called eagerly from the API lifespan so the cost (~0.76 s, ~100 MB on the
     current dictionary) is paid at startup instead of by the first request. It
     is idempotent, which also keeps the test suite from rebuilding on every
     lifespan invocation.

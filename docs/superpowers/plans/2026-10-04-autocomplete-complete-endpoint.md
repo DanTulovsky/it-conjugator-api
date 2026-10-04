@@ -1591,8 +1591,18 @@ fixes before either shipped: `is_lemma`-first ordering does **not** work
 (Wiktionary marks pronominal verbs — `abbacchiarsi`, `mangiarla`,
 `abbacchiandoci` — as lemmas, so the infinitive stayed outside the top 20), and
 `verbs.db`'s `infinitive` column is not a plain-infinitive list either. The rule
-that works is `is_lemma AND ends with -are/-ere/-ire/-rre`: 10,653 of 384,652
-verb keys. See the spec's "Canonical-first ordering" section. The test that pinned
-the old ordering was renamed to
+that works is `is_lemma AND an infinitive ending`, where the endings include the
+`-si` reflexives: 13,141 of 384,651 verb keys. See the spec's "Canonical-first
+ordering" section. The test that pinned the old ordering was renamed to
 `test_results_are_canonical_first_then_alphabetical` — the deliberate change that
 named behaviour was always going to require.
+
+A code review of that follow-up caught a real gap the first cut had: the plain
+endings alone dropped reflexive infinitives, and for inherently-pronominal verbs
+(`pentirsi`, `accorgersi`, `mettersi`) the reflexive is the *only* infinitive —
+`mettersi` sat outside a default `limit` for its own prefix. Adding
+`-arsi`/`-ersi`/`-irsi` fixed that (`pentirsi` 1st, `sedersi` 2nd) while leaving
+`mangiare` at 3rd, and `is_lemma` kept excluding lookalikes such as `apersi`
+(passato remoto of `aprire`). 132 reflexive keys Wiktionary records as pure forms
+(`ricordarsi`) remain unboosted — an upstream data limitation, documented in the
+spec, not worked around with a looser heuristic.

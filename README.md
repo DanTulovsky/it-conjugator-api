@@ -325,9 +325,11 @@ infinitives that start that way — `manganare`, `manganellare`, `mangiare`, …
 before any inflected form, so `mangiare` lands 3rd rather than 37th. Within each
 group, results are alphabetical ignoring case and accents, and inflected forms
 are still returned in full: they simply follow the infinitives. Only the verb
-bucket is ordered this way. Wiktionary gives pronominal verbs (`abbacchiarsi`,
-`mangiarla`) their own entries and marks them as lemmas, so "lemma first" would
-not have been enough to surface the infinitive — it takes the infinitive ending.
+bucket is ordered this way, and reflexive infinitives count (`lavarsi`, `pentirsi`,
+`accorgersi`) since for those verbs the reflexive *is* the dictionary form.
+Wiktionary gives gerunds and clitic-object verbs (`abbacchiandoci`, `mangiarla`)
+their own entries and marks them as lemmas, so "lemma first" would not have been
+enough to surface the infinitive — it takes the infinitive ending.
 
 **An unmatched prefix is not an error.** The response is `200` with
 `success: true`, `matches: []`, and a `note` — an unknown prefix is a normal

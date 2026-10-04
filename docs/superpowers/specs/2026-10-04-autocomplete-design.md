@@ -89,7 +89,7 @@ New module `app/autocomplete_core.py`. Two dicts, built once at startup:
 - `buckets: dict[str, tuple[list[str], list[str]]]` — POS → a pair of sorted,
   deduped *folded key* lists: the bucket's **canonical** keys first, then the
   rest. The search surface is 603,520 keys across 23 buckets (`verb` alone is
-  384,652, of which 10,653 are canonical).
+  384,651, of which 13,141 are canonical).
 - `overrides: dict[str, dict[str, str]]` — POS → `{folded key: real spelling}`
   for the 45,261 entries whose spelling differs from their key, so results show
   `città` and `Manco` rather than `citta` and `manco`. Keyed per POS, so the key
@@ -105,17 +105,30 @@ here — a word-final accent is exactly what `città` → `citta` must strip.
 ### Canonical-first ordering
 
 Each bucket is split so a query can offer a word's canonical form before its
-inflected forms. For verbs the canonical form is **the infinitive**: a key that
-is `is_lemma` *and* ends in `-are`/`-ere`/`-ire`/`-rre`. That is what puts
-`mangiare` 3rd for the prefix `mang`, instead of 37th behind `mangiai`,
-`mangiammo` and the rest.
+inflected forms. For verbs the canonical form is **the infinitive** — a key that
+is `is_lemma` *and* ends in a plain infinitive ending (`-are`/`-ere`/`-ire`,
+including the `-rre` verbs) or the `-si` reflexive form of one
+(`-arsi`/`-ersi`/`-irsi`). That is what puts `mangiare` 3rd for the prefix `mang`,
+instead of 37th behind `mangiai`, `mangiammo` and the rest.
+
+The `-si` endings are not optional. For inherently-pronominal verbs the reflexive
+*is* the dictionary form, and without them those verbs fell outside a default
+`limit` for their own prefix — measured at 16th–18th of 20 for `pentirsi` /
+`accorgersi`, and outside the window entirely for `mettersi`. With them,
+`pentirsi` and `accorgersi` come first and `sedersi` second.
 
 `is_lemma` alone is **not** sufficient, which measurement revealed: Wiktionary
-gives pronominal and clitic verbs their own entries and marks them as lemmas, so
-the flag covers 48,432 verb keys — only about a fifth of which are infinitives
-(`abbacchiarsi`, `mangiarla`, `abbacchiandoci` are all "lemmas"). Requiring the
-infinitive ending is what actually surfaces the verb a client can pass to
-`/conjugate`.
+gives gerunds and clitic-object verbs their own entries and marks them as lemmas,
+so the flag covers 48,432 verb keys — only about a quarter of which are
+infinitives (`mangiarla`, `mangiamole` and `abbacchiandoci` are all "lemmas" but
+none is an infinitive). Requiring an infinitive ending is what actually surfaces
+the verb a client can pass to `/conjugate`.
+
+`is_lemma` is still required, and it earns its place: it excludes keys that share
+an infinitive ending without being infinitives, such as `apersi` (passato remoto
+of `aprire`), which `-ersi` alone would have caught. The cost is the 132 reflexive
+keys Wiktionary records as pure forms rather than lemmas — `ricordarsi` among
+them — which stay in the inflected half.
 
 Only the **verb** bucket is split. Every other POS keeps plain alphabetical
 order, because only verbs have a canonical form a client must be able to reach.
@@ -144,7 +157,7 @@ Measured against the real `data/dictionary.db`:
 | scan 622,957 rows | 0.17 s |
 | fold + bucket | 0.43 s |
 | sort + dedup | 0.03 s |
-| **startup cost** | **~0.76 s**, ~100 MB RSS |
+| **startup cost** | **~0.8 s**, ~120 MB RSS |
 
 Because the index is derived from `dictionary.db` on every boot it cannot go
 stale. Consequently there is **no** prebuilt index artifact: no build script, no
@@ -201,7 +214,7 @@ client sends on every keystroke — is ~5 µs.
 | `citta` | matches `città` and `città santa` |
 | `pero` | matches `però` (the dump has no unaccented `pero`); overrides carry the accent |
 | key `manco` with `pos=verb` vs `pos=name` | `mancò` vs `Manco` |
-| `mang` with `pos=verb` | the infinitives lead (`manganare`, `manganellare`, `mangiare`, …), then the inflected forms; `mangiare` is 3rd of 20 rather than 37th |
+| `mang` with `pos=verb` | the infinitives lead (`manganare`, `manganellare`, `mangiare`, `mangiarsi`, …), then the inflected forms; `mangiare` is 3rd of 20 rather than 37th |
 | multiword entries (`man mano`, `città santa`) and proper names (`Manacorda`) | in the index by default; a space sorts before letters, so phrases cluster first. Narrowed out with `pos`. |
 | missing `dictionary.db` | startup already fails; `/complete` is never reachable |
 
@@ -267,7 +280,8 @@ the project's one test-only dependency; `app/` never imports it.
     inflected ones within a POS, across a multi-POS merge, and on the substring
     path; `limit` can be filled entirely by canonical forms; and nothing is
     dropped. Backed by the `_is_canonical` rule, including the pronominal verbs
-    (`abbacchiarsi`, `mangiarla`) that made `is_lemma` unusable. On the real
+    (`mangiarla`, `abbacchiandoci`) that made `is_lemma` unusable, and the
+    reflexive infinitives (`pentirsi`, `accorgersi`) the plain rule first missed. On the real
     database, `mang` + `pos=verb` puts `mangiare` ahead of `manganai`/`mangana`,
     which sort before it alphabetically.
 11. **OpenAPI contract** — `swagger.json` parses, contains the `/complete`
@@ -290,10 +304,10 @@ Each with its ceiling and the upgrade path if it is ever hit:
   prefix `mang`, and that `is_lemma`-based ordering would not have fixed it.
 - **No substring index.** A linear scan (10.5 ms worst case) stands in for a
   trigram or suffix-array index. Build one if substring becomes the common path.
-- **No prebuilt index file.** ~0.76 s of startup is cheaper than an artifact to
+- **No prebuilt index file.** ~0.8 s of startup is cheaper than an artifact to
   generate, ship, and invalidate.
 - **No infinitive-only filter.** Canonical-first ordering surfaces infinitives
   without hiding anything. A `lemma=true` filter would shrink the verb bucket
-  from 384,652 keys to 10,653 (and the whole index from 603,520 to 229,522,
+  from 384,651 keys to 13,141 (and the whole index from 603,520 to 232,010,
   roughly halving startup memory) — worth adding if a client wants to browse
   only infinitives rather than search for one.
