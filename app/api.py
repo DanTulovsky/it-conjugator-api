@@ -97,7 +97,7 @@ async def lifespan(app: FastAPI):
             "if it is not already present at data/kaikki.org-dictionary-Italian.jsonl."
         )
     # The prefix index is rebuilt from dictionary.db on every start, so it can
-    # never be stale — there is no artifact to invalidate. ~0.65 s and ~115 MB
+    # never be stale — there is no artifact to invalidate. ~0.8 s and ~120 MB
     # on the current dictionary, paid here rather than by the first request.
     try:
         autocomplete_core.ensure_index()
@@ -129,7 +129,7 @@ def health() -> HealthResponse:
             label: os.path.exists(path) for label, path in REQUIRED_DATABASES.items()
         },
         # Deliberately does not call ensure_index(): a liveness probe must not
-        # trigger a 0.65 s build.
+        # trigger a 0.8 s build.
         autocomplete=autocomplete_core.index_stats(),
     )
 

@@ -643,7 +643,7 @@ _build_ms: int | None = None
 def ensure_index() -> Index:
     """Return the process-wide index, building it on first use.
 
-    Called eagerly from the API lifespan so the cost (~0.65 s, ~115 MB on the
+    Called eagerly from the API lifespan so the cost (~0.8 s, ~120 MB on the
     current dictionary) is paid at startup instead of by the first request. It
     is idempotent, which also keeps the test suite from rebuilding on every
     lifespan invocation.
@@ -1131,7 +1131,7 @@ git commit -m "feat(api): add the /complete prefix autocomplete endpoint"
 ### Task 4: Build the index eagerly at startup, and report it on `/health`
 
 Right now the index is built by whichever request arrives first. That moves a
-~0.65 s, ~115 MB cost onto a user-facing request, which is the wrong place for
+~0.8 s, ~120 MB cost onto a user-facing request, which is the wrong place for
 it. Build it in `lifespan` instead, alongside the existing database checks, and
 surface its shape on `/health` so a broken index is visible from outside.
 
@@ -1233,7 +1233,7 @@ In `app/api.py`, in `lifespan`, insert before the `yield`:
 
 ```python
     # The prefix index is rebuilt from dictionary.db on every start, so it can
-    # never be stale — there is no artifact to invalidate. ~0.65 s and ~115 MB
+    # never be stale — there is no artifact to invalidate. ~0.8 s and ~120 MB
     # on the current dictionary, paid here rather than by the first request.
     autocomplete_core.ensure_index()
     yield
@@ -1249,7 +1249,7 @@ def health() -> HealthResponse:
             label: os.path.exists(path) for label, path in REQUIRED_DATABASES.items()
         },
         # Deliberately does not call ensure_index(): a liveness probe must not
-        # trigger a 0.65 s build.
+        # trigger a 0.8 s build.
         autocomplete=autocomplete_core.index_stats(),
     )
 ```

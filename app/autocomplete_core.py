@@ -297,7 +297,7 @@ _build_ms: int | None = None
 def ensure_index() -> Index:
     """Return the process-wide index, building it on first use.
 
-    Called eagerly from the API lifespan so the cost (~0.76 s, ~100 MB on the
+    Called eagerly from the API lifespan so the cost (~0.8 s, ~120 MB on the
     current dictionary) is paid at startup instead of by the first request. It
     is idempotent, which also keeps the test suite from rebuilding on every
     lifespan invocation.
