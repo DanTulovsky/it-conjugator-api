@@ -207,6 +207,13 @@ want a clean dropdown pass `pos=noun,verb,adj`.
 `tests/test_conjugations.py` and `tests/test_dictionary.py`. Needs a built
 `dictionary.db` (`task db`).
 
+Endpoint behaviour is covered twice on purpose: once by calling the endpoint
+function directly (the existing repo style, which gives precise access to the
+response model) and once through `fastapi.testclient.TestClient`, which is the
+only way to pin the status codes and JSON bodies a client actually receives.
+`TestClient` requires `httpx`, which is therefore added to `requirements.txt` as
+the project's one test-only dependency; `app/` never imports it.
+
 1. **Fold** — `città` → `citta`, `però` → `pero`, `CANE` → `cane`; idempotent.
 2. **Prefix, one POS** — `man` + `pos=verb` returns only verbs, alphabetically,
    respecting `limit`.

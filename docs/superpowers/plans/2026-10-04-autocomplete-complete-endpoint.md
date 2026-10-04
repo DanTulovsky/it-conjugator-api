@@ -21,8 +21,14 @@ it as `/complete` behind the existing `X-API-Key` gate.
 
 ## Global Constraints
 
-- **No new dependencies.** `requirements.txt` is unchanged. `bisect`, `heapq`,
-  `sqlite3`, and `unittest` are all stdlib.
+- **Dependencies.** The implementation itself adds none: `bisect`, `heapq`,
+  `sqlite3` and `unittest` are all stdlib. Task 3 adds **one test-only
+  dependency**, `httpx`, to `requirements.txt` so `fastapi.testclient.TestClient`
+  can drive the real ASGI stack. The user approved this. At roughly 10 MB on the
+  image it is the simplest way to get reproducible HTTP-level tests, given the
+  repo has no separate dev-requirements file. If image size matters more than
+  that, move `httpx` to a new `requirements-dev.txt` — but then `task test` needs
+  it installed, so `Taskfile.yml` changes too.
 - **Python 3.12** in the image (`FROM python:3.12-slim`). Avoid 3.13-only syntax.
 - **Interpreters.** System `python3` has no FastAPI installed. Focused runs use
   `.venv/bin/python`. The `Taskfile` uses bare `python3`, which resolves inside
@@ -37,6 +43,11 @@ it as `/complete` behind the existing `X-API-Key` gate.
   compares the checked-in file against `app.openapi()` and raises `RuntimeError`
   when they differ, so the API will not boot until it is regenerated. This is
   the repo's only OpenAPI artifact — JSON, not YAML.
+- **Branch.** The user explicitly consented to committing directly to `main` in
+  this checkout. Do **not** create a branch or a git worktree: `data/verbs.db`,
+  `data/dictionary.db`, the Kaikki dump, `.venv` and `.env` are all gitignored
+  and present here, so `task test` works as-is. A worktree would not contain
+  them and every dictionary-backed test would silently skip.
 - **Verify with the interpreter that is actually installed.** A green focused
   run is the evidence a step is done; do not claim a step passes without it.
 - **Verbatim values from the spec:** default `limit` 20, clamped to 1–100;
@@ -56,6 +67,7 @@ it as `/complete` behind the existing `X-API-Key` gate.
 | `app/api.py` (modify) | The `/complete` route, eager index build in `lifespan`, `/health` stats. |
 | `tests/test_autocomplete.py` (create) | Fold, index, and endpoint tests. |
 | `tests/test_dictionary.py` (modify) | Existing OpenAPI-contract assertions must learn about `/complete`. |
+| `requirements.txt` (modify) | One added line: `httpx`, so `fastapi.testclient` can drive the real ASGI stack in tests. |
 | `swagger.json` (modify) | Regenerated, twice: once for the route, once for `HealthResponse`. |
 | `README.md` (modify) | Endpoints table row and a `/complete` section. |
 
@@ -710,6 +722,7 @@ not pass — until all three change together.
 **Files:**
 - Modify: `app/models.py`
 - Modify: `app/api.py`
+- Modify: `requirements.txt` (adds `httpx`, test-only)
 - Modify: `tests/test_dictionary.py` (the `TestOpenAPIContract` class)
 - Modify: `tests/test_autocomplete.py`
 - Modify: `swagger.json` (regenerated)
@@ -724,9 +737,21 @@ not pass — until all three change together.
   - `models.CompleteResponse(success, requested, note, error, data)`
   - `api.complete(q, pos, limit, substring, api_key) -> CompleteResponse | JSONResponse`
 
-- [ ] **Step 1: Write the failing endpoint tests**
+- [ ] **Step 1: Add the HTTP test dependency, then write the failing tests**
 
-Append to `tests/test_autocomplete.py`:
+Two actions, both prerequisites of this task's deliverable. First, append
+`httpx` to `requirements.txt` (**on its own line**, after `uvicorn[standard]`),
+then install it into the local virtualenv:
+
+```bash
+printf 'httpx\n' >> requirements.txt
+.venv/bin/pip install httpx
+```
+
+`httpx` is what `fastapi.testclient.TestClient` drives; it is a test-only
+dependency, never imported by `app/`.
+
+Now append to `tests/test_autocomplete.py`:
 
 ```python
 class TestCompleteEndpoint(unittest.TestCase):
@@ -826,13 +851,70 @@ class TestCompleteEndpoint(unittest.TestCase):
         self.assertEqual(prefix_only, [])
         self.assertTrue(with_substring)
         self.assertTrue(any(not fold(w).startswith("tta") for w in with_substring))
+
+
+class TestCompleteHTTP(unittest.TestCase):
+    """The real HTTP surface, through Starlette's ASGI stack.
+
+    The tests above call the endpoint function directly. These go over HTTP, so
+    they prove the status codes, headers and JSON bodies a client actually
+    receives — which is the part a direct call cannot vouch for.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        from fastapi.testclient import TestClient
+
+        # Deliberately NOT used as a context manager: that would run the
+        # lifespan (database checks, contract check, index build), none of which
+        # these tests are about. Without startup, `complete` still works because
+        # it calls ensure_index() lazily.
+        cls.client = TestClient(api.app)
+
+    def _get(self, **params):
+        return self.client.get(
+            "/complete", params=params, headers={"X-API-Key": api.API_KEY}
+        )
+
+    def test_missing_key_is_401(self):
+        resp = self.client.get("/complete", params={"q": "cane"})
+        self.assertEqual(resp.status_code, 401)
+
+    def test_blank_query_is_400(self):
+        resp = self._get(q="   ")
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("'q'", resp.json()["error"])
+
+    @unittest.skipUnless(REPO_HAS_DICTIONARY, "dictionary.db not built — run `task db:dictionary`")
+    def test_unknown_pos_is_400(self):
+        resp = self._get(q="mang", pos="bogus")
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("bogus", resp.json()["error"])
+
+    @unittest.skipUnless(REPO_HAS_DICTIONARY, "dictionary.db not built — run `task db:dictionary`")
+    def test_success_is_200_with_the_documented_shape(self):
+        resp = self._get(q="citt", pos="noun", limit=5)
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertTrue(body["success"])
+        self.assertEqual(body["requested"]["q"], "citt")
+        self.assertEqual(body["requested"]["pos"], ["noun"])
+        self.assertEqual(body["requested"]["limit"], 5)
+        self.assertIs(body["requested"]["substring"], False)
+        self.assertEqual(body["data"]["queried"], "citt")
+        self.assertEqual(body["data"]["pos"], ["noun"])
+        self.assertEqual(
+            body["data"]["matches"],
+            ["città", "città santa", "città sante", "città stato", "città vecchia"],
+        )
 ```
 
 - [ ] **Step 2: Run the endpoint tests to verify they fail**
 
-Run: `.venv/bin/python -m unittest tests.test_autocomplete.TestCompleteEndpoint -v`
+Run: `.venv/bin/python -m unittest tests.test_autocomplete.TestCompleteEndpoint tests.test_autocomplete.TestCompleteHTTP -v`
 
-Expected: FAIL — `AttributeError: module 'app.api' has no attribute 'complete'`.
+Expected: FAIL — `AttributeError: module 'app.api' has no attribute 'complete'`,
+and for the HTTP tests `404 != 200` / `404 != 401`.
 
 - [ ] **Step 3: Add the models**
 
@@ -1034,12 +1116,12 @@ Expected: PASS, including `test_contract_in_sync_when_file_present` and
 
 Run: `task test`
 
-Expected: `Ran 89 tests ... OK`.
+Expected: `Ran 93 tests ... OK`.
 
 - [ ] **Step 10: Commit**
 
 ```bash
-git add app/models.py app/api.py swagger.json tests/test_dictionary.py tests/test_autocomplete.py
+git add app/models.py app/api.py requirements.txt swagger.json tests/test_dictionary.py tests/test_autocomplete.py
 git commit -m "feat(api): add the /complete prefix autocomplete endpoint"
 ```
 
@@ -1175,7 +1257,7 @@ def health() -> HealthResponse:
 
 Run: `.venv/bin/python -m unittest tests.test_autocomplete -v`
 
-Expected: PASS — 43 tests.
+Expected: PASS — 47 tests.
 
 - [ ] **Step 6: Regenerate the contract again**
 
@@ -1195,22 +1277,34 @@ Expected: PASS.
 
 Run: `task test`
 
-Expected: `Ran 93 tests ... OK`.
+Expected: `Ran 97 tests ... OK`.
 
-- [ ] **Step 8: Confirm the app boots and the endpoint answers**
+- [ ] **Step 8: Confirm the app boots and the endpoint answers over real HTTP**
+
+Startup is part of what is being verified here, so this one *does* run the
+lifespan (`TestClient` as a context manager). No server, no background process,
+no new dependency — just `httpx` driving the real ASGI stack:
 
 ```bash
-SCRAPER_API_KEY=dev-key .venv/bin/python -m uvicorn app.api:app --port 8123 &
-sleep 3
-curl -s -H "X-API-Key: dev-key" "http://127.0.0.1:8123/complete?q=mangi&pos=verb&limit=5"
-curl -s -H "X-API-Key: dev-key" "http://127.0.0.1:8123/complete?q=citta&pos=noun&limit=3"
-curl -s "http://127.0.0.1:8123/health"
-kill %1
+SCRAPER_API_KEY=dev-key .venv/bin/python -c "
+import json
+from fastapi.testclient import TestClient
+from app.api import app
+h = {'X-API-Key': 'dev-key'}
+with TestClient(app) as c:          # runs the lifespan: DB checks, contract check, index build
+    print('health  ', json.dumps(c.get('/health').json()['autocomplete']))
+    r = c.get('/complete', params={'q': 'mangiare', 'pos': 'verb', 'limit': 3}, headers=h)
+    print('complete', r.status_code, json.dumps(r.json()['data']['matches'], ensure_ascii=False))
+    r = c.get('/complete', params={'q': 'citta', 'pos': 'noun', 'limit': 3}, headers=h)
+    print('accents ', r.status_code, json.dumps(r.json()['data']['matches'], ensure_ascii=False))
+"
 ```
 
-Expected: the first `curl` returns `mangiare` among the matches, the second
-returns `città`, and `/health` reports
-`"autocomplete": {"parts_of_speech": 23, "keys": 600000+, "build_ms": ...}`.
+Expected: `health` reports
+`{"parts_of_speech": 23, "keys": 603520, "build_ms": <a few hundred>}`; the first
+`complete` returns `["mangiare", "mangiare a quattro ganasce", "mangiare la foglia"]`;
+the second returns `["città", "città santa", "città sante"]` — the accent-folded
+query finding the accented spelling.
 
 - [ ] **Step 9: Commit**
 
@@ -1309,17 +1403,36 @@ answer to a normal question. Only a blank `q` or an unknown `pos` is a `400`.
 
 - [ ] **Step 3: Verify the documented examples by hand**
 
-Start the server as in Task 4 Step 8, then confirm the README's claims:
+Confirm every claim the README now makes, through the real HTTP surface:
 
 ```bash
-curl -s -H "X-API-Key: dev-key" --get --data-urlencode "q=ttà" --data "pos=verb" "http://127.0.0.1:8123/complete"
-curl -s -H "X-API-Key: dev-key" --get --data-urlencode "q=ttà" --data "pos=verb" --data "substring=true" --data "limit=3" "http://127.0.0.1:8123/complete"
-curl -s -H "X-API-Key: dev-key" "http://127.0.0.1:8123/complete?q=mangi&pos=Bogus"
+SCRAPER_API_KEY=dev-key .venv/bin/python -c "
+import json
+from fastapi.testclient import TestClient
+from app.api import app
+h = {'X-API-Key': 'dev-key'}
+with TestClient(app) as c:
+    r = c.get('/complete', params={'q': 'citt', 'pos': 'noun', 'limit': 5}, headers=h)
+    print('README example :', json.dumps(r.json()['data']['matches'], ensure_ascii=False))
+    r = c.get('/complete', params={'q': 'ttà', 'pos': 'verb'}, headers=h)
+    print('prefix only    :', r.status_code, r.json()['data']['matches'], '|', r.json()['note'])
+    r = c.get('/complete', params={'q': 'ttà', 'pos': 'verb', 'substring': 'true', 'limit': 3}, headers=h)
+    print('with substring :', r.status_code, json.dumps(r.json()['data']['matches'], ensure_ascii=False))
+    r = c.get('/complete', params={'q': 'mangi', 'pos': 'Bogus'}, headers=h)
+    print('bad pos        :', r.status_code, r.json()['error'][:80])
+"
 ```
 
-Expected, in order: `matches: []` with a note; a non-empty `matches` list; and a
-`400` whose error names `Bogus` and lists the allowed values. Correct the README
-if any example does not match reality.
+Expected, in order:
+
+1. `["città", "città santa", "città sante", "città stato", "città vecchia"]` —
+   must match the README's JSON example exactly.
+2. `200 [] | No completions for this prefix.`
+3. `200 ["abballotta", "abballottai", "abballottammo"]`
+4. `400 Unknown part(s) of speech: Bogus. Allowed: adj, adv, article, …`
+
+Correct the README if any line does not match reality — the README is the
+deliverable here, and an example that cannot be reproduced is worse than none.
 
 - [ ] **Step 4: Rebuild the databases and run the full suite from scratch**
 
@@ -1333,31 +1446,11 @@ Expected: `db:verbs` and `db:dictionary` — both report up to date (their
 
 Run: `task test`
 
-Expected: `Ran 93 tests ... OK`. If any test fails only when the databases were
+Expected: `Ran 97 tests ... OK`. If any test fails only when the databases were
 rebuilt, the index build has a dependency on table row order; investigate rather
 than reordering the test.
 
-- [ ] **Step 5: Verify the startup guards still fire**
-
-```bash
-mv data/dictionary.db data/dictionary.db.bak
-.task/checksum/db-dictionary 2>/dev/null || true
-SCRAPER_API_KEY=dev-key .venv/bin/python -c "
-import asyncio, traceback
-from app import api
-try:
-    asyncio.run(api.lifespan(api.app).__aenter__())
-except RuntimeError as exc:
-    print('OK — refused to start:')
-    print(str(exc)[:200])
-"
-mv data/dictionary.db.bak data/dictionary.db
-```
-
-Expected: the message names the missing `dictionary.db` and repeats the
-`task db` fix instructions. The final `mv` must run even if the check fails.
-
-- [ ] **Step 6: Review the final diff**
+- [ ] **Step 5: Review the final diff**
 
 Run: `git diff --stat HEAD~4` (four commits back — Task 1 through Task 5's docs)
 
@@ -1368,17 +1461,19 @@ Expected exactly these files, nothing else:
  app/api.py                     |  ...
  app/autocomplete_core.py       |  ...
  app/models.py                  |  ...
- docs/...                       |  ...   (the spec, already committed)
+ docs/...                       |  ...   (the spec and plan, already committed)
+ requirements.txt               |  ...   (one added line: httpx)
  swagger.json                   |  ...
  tests/test_autocomplete.py     |  ...
  tests/test_dictionary.py       |  ...
 ```
 
-Confirm no scratch file, no stray probe script, and no change to
-`requirements.txt`, `Taskfile.yml`, or `Dockerfile` — the design deliberately
-adds no new artifact to build, ship, or invalidate.
+Confirm no scratch file, no stray probe script, and **no change to
+`Taskfile.yml` or `Dockerfile`** — the design deliberately adds no new artifact
+to build, ship, or invalidate. The only `requirements.txt` change is the single
+`httpx` line from Task 3; if anything else moved in it, investigate.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add README.md
@@ -1409,6 +1504,7 @@ git commit -m "docs: document the /complete endpoint"
 | `limit` clamped to 1–100, not rejected | 2 |
 | Multi-word and proper-name entries present; `pos` narrows | 3 (`test_pos_filter_changes_the_result`) |
 | `/health` reports index stats | 4 |
+| HTTP-level status codes and bodies (401, 400, 200 shape) | 3 (`TestCompleteHTTP`) |
 | `swagger.json` regenerated; app boots | 3 Step 7, 4 Step 6 |
 | Ordering is folded-alphabetical, and pinned | 3 (`test_results_are_ordered_by_folded_key`) |
 | Tests: fold, prefix, POS, accents, collisions, substring, limits, errors, consistency | 1, 2, 3 |
@@ -1435,7 +1531,28 @@ is written in Task 2 and reset by a test in Task 4, which is the same name.
 such by `HealthResponse.autocomplete` in Task 4. `fold` is imported into the
 test module in Task 1 and used by Task 3's tests.
 Test counts, assuming every method above is added verbatim:
-49 (baseline, measured) → 64 → 77 → 89 → 93.
+49 (baseline, measured) → 64 (Task 1) → 77 (Task 2) → 93 (Task 3) → 97 (Task 4).
+
+**Corrections already applied to this plan.** Each was a real defect found by
+running the plan's own code and commands, not a style preference:
+
+- `test_substring_is_opt_in` used `q=are` and asserted the prefix path returns
+  `[]`. It does not: 20 verb keys start with `are` (`areare`, `arenai`, …).
+  Replaced with `q=ttà`, which folds to `tta` and genuinely has zero prefix
+  matches but many substring matches.
+- `test_completes_a_verb_prefix` used `q=mangi` and asserted `mangiare` is in the
+  default `limit=20` results. It is the 37th of 138 matches. Changed to
+  `q=mangiare`.
+- Task 4's and Task 5's smoke tests used `uvicorn … &` with `curl` and `kill %1`,
+  which can strand a server or fail on process-group reaping, and
+  `fastapi.testclient` is unusable without `httpx`. Replaced with `TestClient`
+  (and `httpx` added to `requirements.txt`, which the user approved).
+- Task 5 previously ended with a step that moved `dictionary.db` aside to check
+  the startup guard. It contained a leftover no-op line and would have
+  invalidated Task's `db:dictionary` checksum, risking a surprise multi-minute
+  rebuild on the next `task test`. Deleted: the guard is already covered by the
+  existing `test_hard_fails_when_database_missing` and
+  `test_hard_fails_when_contract_missing`.
 
 **Assumptions checked against the real database.** Every expected value that
 depends on the built dictionary was measured, not guessed:
