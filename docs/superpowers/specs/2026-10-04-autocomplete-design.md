@@ -186,8 +186,18 @@ want a clean dropdown pass `pos=noun,verb,adj`.
 - `/health` — extend so the loaded index is observable: POS count, key count,
   and build seconds. Cheap, and the only way to confirm from outside that the
   index actually built.
-- `swagger.json` — **must** be regenerated with `task swagger`. Startup refuses
-  to boot when it drifts from the running app, so this is not optional.
+- `swagger.json` — **must** be regenerated with `task swagger`, and this is a
+  hard requirement, not a nicety: `_contract_problem()` in `lifespan` compares
+  the checked-in file against `app.openapi()` and raises `RuntimeError` when
+  they differ, so the API will not start at all until the contract is
+  regenerated. This is the repo's only OpenAPI artifact — it is JSON, produced
+  by `dump_openapi.py`, and read from `config.SWAGGER_PATH`. There is no YAML
+  copy and none is added: a second serialisation of the same document would be
+  a second thing to keep in sync, and the startup check only understands the
+  JSON one.
+
+  Acceptance: `python3 dump_openapi.py` leaves `swagger.json` unmodified
+  (regenerating a correct contract is a no-op) and the app boots.
 - `README.md` — a row in the endpoints table and a `/complete` section in the
   style of the `/define` and `/conjugate` sections.
 
@@ -214,6 +224,10 @@ want a clean dropdown pass `pos=noun,verb,adj`.
 10. **Consistency** — for a sample of queries, every returned word exists in
     `dictionary.db` for the requested POS. This is the check that catches an
     index built from a stale or wrong source.
+11. **OpenAPI contract** — `swagger.json` parses, contains the `/complete`
+    path with its four parameters, and equals `app.openapi()` exactly. This
+    duplicates the startup guard as a test so a forgotten `task swagger`
+    fails the suite instead of only failing at boot.
 
 No performance assertions: timing tests flake on CI. The timings above are
 recorded here as the design's justification, and re-measured by hand if the
