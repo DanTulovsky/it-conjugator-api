@@ -1,7 +1,15 @@
 # Taskfile — https://taskfile.dev
-# Targets: db, db:verbs, db:dictionary, test, build, run
+# Targets: db, db:verbs, db:dictionary, test, swagger, build, run
 
 version: "3"
+
+vars:
+  # Prefer the project virtualenv so `task` works from a shell that has not
+  # activated it. Bare `python3` may resolve to an interpreter without the
+  # dependencies (e.g. a pyenv/system python), which fails confusingly in the
+  # test task. Falls back to `python3` when there is no local venv.
+  PYTHON:
+    sh: if [ -x .venv/bin/python ]; then echo .venv/bin/python; else echo python3; fi
 
 tasks:
   db:
@@ -11,7 +19,7 @@ tasks:
   db:verbs:
     desc: Build the conjugation database (verbs.db) from the Kaikki Italian dump
     cmds:
-      - python3 build_db.py
+      - "{{.PYTHON}} build_db.py"
     sources:
       - build_db.py
     generates:
@@ -20,7 +28,7 @@ tasks:
   db:dictionary:
     desc: Build the full dictionary database (dictionary.db) from the Kaikki Italian dump
     cmds:
-      - python3 build_dictionary_db.py
+      - "{{.PYTHON}} build_dictionary_db.py"
     sources:
       - build_dictionary_db.py
     generates:
@@ -30,12 +38,12 @@ tasks:
     desc: Run the regression test suite (stdlib unittest)
     deps: [db]
     cmds:
-      - python3 -m unittest discover -s tests -v
+      - "{{.PYTHON}} -m unittest discover -s tests -v"
 
   swagger:
     desc: Regenerate swagger.json (the OpenAPI contract) from the FastAPI app
     cmds:
-      - python3 dump_openapi.py
+      - "{{.PYTHON}} dump_openapi.py"
     sources:
       - app/api.py
       - app/models.py
