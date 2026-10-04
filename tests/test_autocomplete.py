@@ -322,6 +322,14 @@ class TestCompleteEndpoint(unittest.TestCase):
         self.assertTrue(with_substring)
         self.assertTrue(any(not fold(w).startswith("tta") for w in with_substring))
 
+    @unittest.skipUnless(REPO_HAS_DICTIONARY, "dictionary.db not built — run `task db:dictionary`")
+    def test_the_endpoint_does_not_pay_for_the_build(self):
+        # Startup builds the index, so the endpoint must find it already there.
+        autocomplete_core.ensure_index()
+        before = autocomplete_core.index_stats()["build_ms"]
+        api.complete(q="mang", pos="verb", api_key=api.API_KEY)
+        self.assertEqual(autocomplete_core.index_stats()["build_ms"], before)
+
 
 class TestCompleteHTTP(unittest.TestCase):
     """The real HTTP surface, through Starlette's ASGI stack.
@@ -377,3 +385,39 @@ class TestCompleteHTTP(unittest.TestCase):
             body["data"]["matches"],
             ["città", "città santa", "città sante", "città stato", "città vecchia"],
         )
+
+
+class TestIndexStartup(unittest.TestCase):
+    """The index is derived from dictionary.db, so it can never go stale."""
+
+    def _run_lifespan(self):
+        import asyncio
+
+        async def go():
+            async with api.lifespan(api.app):
+                return True
+
+        return asyncio.run(go())
+
+    @unittest.skipUnless(REPO_HAS_DICTIONARY, "dictionary.db not built — run `task db:dictionary`")
+    def test_lifespan_builds_the_index(self):
+        autocomplete_core._index = None
+        try:
+            self.assertTrue(self._run_lifespan())
+            self.assertIsNotNone(autocomplete_core._index)
+        finally:
+            autocomplete_core._index = None
+
+    @unittest.skipUnless(REPO_HAS_DICTIONARY, "dictionary.db not built — run `task db:dictionary`")
+    def test_lifespan_is_happy_when_the_index_is_already_built(self):
+        autocomplete_core.ensure_index()
+        self.assertTrue(self._run_lifespan())
+
+    @unittest.skipUnless(REPO_HAS_DICTIONARY, "dictionary.db not built — run `task db:dictionary`")
+    def test_health_reports_index_stats(self):
+        autocomplete_core.ensure_index()
+        health = api.health()
+        self.assertTrue(health.ok)
+        self.assertEqual(health.autocomplete["parts_of_speech"], 23)
+        self.assertGreater(health.autocomplete["keys"], 600_000)
+        self.assertIn("build_ms", health.autocomplete)

@@ -923,6 +923,21 @@
             "type": "object",
             "title": "Databases",
             "description": "Presence of each required SQLite database"
+          },
+          "autocomplete": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Autocomplete",
+            "description": "Prefix index stats: parts_of_speech, keys, build_ms. null when the index has not been built yet."
           }
         },
         "type": "object",

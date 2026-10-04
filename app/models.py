@@ -182,3 +182,10 @@ class HealthResponse(BaseModel):
     databases: dict[str, bool] = Field(
         ..., description="Presence of each required SQLite database"
     )
+    autocomplete: dict[str, int] | None = Field(
+        None,
+        description=(
+            "Prefix index stats: parts_of_speech, keys, build_ms. "
+            "null when the index has not been built yet."
+        ),
+    )
