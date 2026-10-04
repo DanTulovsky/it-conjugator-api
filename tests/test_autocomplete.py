@@ -24,7 +24,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from app import autocomplete_core, dictionary_core  # noqa: E402
-from app.autocomplete_core import Index, fold  # noqa: E402
+from app.autocomplete_core import Index, _is_canonical, fold  # noqa: E402
 
 # The API key is read from the environment at import time; set it before we
 # import app.api so the endpoints accept our test key.
@@ -42,14 +42,114 @@ def _tiny_index():
     Keys are already folded, as ``build_index`` guarantees. ``citta`` has an
     override to ``città``; ``cane`` is deliberately in two POS buckets so the
     cross-bucket dedup path is exercised.
+
+    Every key sits in its bucket's *canonical* half, so these tests pin plain
+    alphabetical order within a group. :func:`_ranked_index` covers the
+    canonical / inflected split.
     """
     return Index(
         buckets={
-            "verb": sorted(["mangiare", "mangi", "mangia", "mangiai", "mancare", "cane"]),
-            "noun": sorted(["cane", "citta", "cittadino", "mancanza"]),
+            "verb": (sorted(["mangiare", "mangi", "mangia", "mangiai", "mancare", "cane"]), []),
+            "noun": (sorted(["cane", "citta", "cittadino", "mancanza"]), []),
         },
         overrides={"noun": {"citta": "città"}},
     )
+
+
+def _ranked_index():
+    """A tiny index whose verb bucket really is split canonical / inflected.
+
+    ``mangiare`` and ``mancare`` are the canonical (infinitive) verbs; ``mangi``,
+    ``mangia``, ``mangiai`` and ``mangiammo`` are inflected forms that sort
+    *before* ``mangiare`` alphabetically — so canonical-first ordering is
+    observable rather than accidental.
+    """
+    return Index(
+        buckets={
+            "verb": (
+                sorted(["mangiare", "mancare"]),
+                sorted(["mangi", "mangia", "mangiai", "mangiammo"]),
+            ),
+            "noun": (sorted(["mancanza"]), []),
+        },
+        overrides={},
+    )
+
+
+class TestCanonicalForm(unittest.TestCase):
+    """Canonical forms (verb infinitives) must be offered before inflected ones."""
+
+    def setUp(self):
+        self.index = _ranked_index()
+
+    def test_canonical_precedes_inflected_within_one_pos(self):
+        # Alphabetically `mangi` < `mangiare`; canonical-first flips that.
+        self.assertEqual(
+            self.index.complete("mang", pos=["verb"]),
+            ["mangiare", "mangi", "mangia", "mangiai", "mangiammo"],
+        )
+
+    def test_limit_can_be_filled_entirely_by_canonical_forms(self):
+        self.assertEqual(self.index.complete("mang", pos=["verb"], limit=1), ["mangiare"])
+        self.assertEqual(
+            self.index.complete("mang", pos=["verb"], limit=2), ["mangiare", "mangi"]
+        )
+
+    def test_inflected_forms_are_still_reachable(self):
+        # Nothing is dropped — the inflected forms simply follow.
+        full = self.index.complete("mang", pos=["verb"], limit=100)
+        for form in ("mangi", "mangia", "mangiai", "mangiammo"):
+            self.assertIn(form, full)
+
+    def test_canonical_precedes_inflected_across_a_multi_pos_merge(self):
+        # Both `mancanza` (noun) and `mancare` (verb) are canonical, so they are
+        # merged alphabetically ahead of anything inflected.
+        self.assertEqual(self.index.complete("manc"), ["mancanza", "mancare"])
+        self.assertEqual(self.index.complete("manc", pos=["verb"]), ["mancare"])
+
+    def test_substring_respects_canonical_first(self):
+        self.assertEqual(
+            self.index.complete("ang", pos=["verb"], substring=True),
+            ["mangiare", "mangi", "mangia", "mangiai", "mangiammo"],
+        )
+
+    def test_no_duplicate_when_a_word_is_canonical_in_one_pos_and_not_another(self):
+        index = Index(buckets={"verb": (["cane"], []), "noun": ([], ["cane"])}, overrides={})
+        self.assertEqual(index.complete("cane"), ["cane"])
+
+    def test_count_and_pos_values_span_both_halves(self):
+        self.assertEqual(self.index.count(), 7)
+        self.assertEqual(self.index.pos_values(), ["noun", "verb"])
+
+    def test_non_verb_buckets_are_not_split(self):
+        self.assertEqual(_tiny_index().complete("citt", pos=["noun"]), ["città", "cittadino"])
+
+
+class TestIsCanonical(unittest.TestCase):
+    """The verb/infinitive rule the split depends on."""
+
+    def test_verb_infinitives_are_canonical(self):
+        for key in ("mangiare", "credere", "finire", "porre", "tradurre", "narrare"):
+            self.assertTrue(_is_canonical("verb", key, True), key)
+
+    def test_verb_inflected_forms_are_not_canonical(self):
+        for key in ("mangiai", "mangiammo", "mangiato", "mangiando", "cane"):
+            self.assertFalse(_is_canonical("verb", key, True), key)
+
+    def test_pronominal_verbs_are_lemmas_but_not_canonical(self):
+        # The finding that made `is_lemma`-first ordering useless: Wiktionary
+        # marks these as lemmas, yet none of them is an infinitive.
+        for key in ("abbacchiarsi", "mangiarla", "abbacchiandoci", "mangiamole"):
+            self.assertFalse(_is_canonical("verb", key, True), key)
+        # ...while a real infinitive with the same shape is canonical.
+        self.assertTrue(_is_canonical("verb", "mangiare", True))
+
+    def test_a_non_lemma_verb_key_is_never_canonical(self):
+        self.assertFalse(_is_canonical("verb", "mangiare", False))
+
+    def test_other_parts_of_speech_are_all_canonical(self):
+        for pos in ("noun", "adj", "adv", "name"):
+            self.assertTrue(_is_canonical(pos, "qualunque", False), pos)
 
 
 class TestFold(unittest.TestCase):
@@ -212,6 +312,26 @@ class TestIndexCaching(unittest.TestCase):
         self.assertEqual(stats["parts_of_speech"], 23)
         self.assertGreater(stats["keys"], 600_000)
 
+    @unittest.skipUnless(REPO_HAS_DICTIONARY, "dictionary.db not built — run `task db:dictionary`")
+    def test_every_bucket_is_split_into_disjoint_sorted_halves(self):
+        # The invariant that keeps `count()` equal to the number of distinct
+        # (word, pos) keys: a key that is both a lemma and a form would otherwise
+        # land in both halves.
+        index = autocomplete_core.ensure_index()
+        for pos, (canonical, other) in index.buckets.items():
+            self.assertEqual(canonical, sorted(set(canonical)), pos)
+            self.assertEqual(other, sorted(set(other)), pos)
+            self.assertFalse(set(canonical) & set(other), f"{pos} halves overlap")
+        self.assertLessEqual(index.count(), 611_169)
+
+    @unittest.skipUnless(REPO_HAS_DICTIONARY, "dictionary.db not built — run `task db:dictionary`")
+    def test_only_the_verb_bucket_is_split(self):
+        index = autocomplete_core.ensure_index()
+        self.assertTrue(index.buckets["verb"][1], "verb bucket should have inflected keys")
+        for pos, (canonical, other) in index.buckets.items():
+            if pos != "verb":
+                self.assertFalse(other, f"{pos} should not be split")
+
 
 class TestCompleteEndpoint(unittest.TestCase):
     """The endpoint gates on the API key exactly like /conjugate and /define."""
@@ -254,9 +374,7 @@ class TestCompleteEndpoint(unittest.TestCase):
 
     @unittest.skipUnless(REPO_HAS_DICTIONARY, "dictionary.db not built — run `task db:dictionary`")
     def test_completes_a_verb_prefix(self):
-        # `mangiare` is the 37th key for the prefix `mangi`, so a shorter prefix
-        # would not reach it inside the default limit. Verified against the
-        # built dictionary: 138 verb keys start with `mangi`.
+        # A long prefix keeps this independent of the canonical-first ordering.
         resp = api.complete(q="mangiare", pos="verb", limit=5, api_key=api.API_KEY)
         self.assertTrue(resp.success)
         self.assertEqual(resp.requested.q, "mangiare")
@@ -267,14 +385,54 @@ class TestCompleteEndpoint(unittest.TestCase):
         self.assertTrue(all(fold(w).startswith("mangiare") for w in resp.data.matches))
 
     @unittest.skipUnless(REPO_HAS_DICTIONARY, "dictionary.db not built — run `task db:dictionary`")
-    def test_results_are_ordered_by_folded_key(self):
-        # The documented ordering: alphabetical ignoring case and accents. This
-        # pins it, so switching to lemma-first ranking later is a deliberate
-        # test change rather than a silent one.
-        matches = api.complete(q="mangi", pos="verb", limit=50, api_key=api.API_KEY)
-        folded = [fold(w) for w in matches.data.matches]
-        self.assertEqual(folded, sorted(folded))
-        self.assertEqual(len(folded), 50)
+    def test_results_are_canonical_first_then_alphabetical(self):
+        # The documented ordering: verb infinitives first, then inflected forms
+        # (each group alphabetical by folded key). This pins it, so any future
+        # ranking change is a deliberate test change rather than a silent one.
+        matches = api.complete(q="mang", pos="verb", limit=100, api_key=api.API_KEY)
+        words = matches.data.matches
+        self.assertEqual(len(words), 100)
+        index = autocomplete_core.ensure_index()
+        canonical = set(index._keys("verb", True))
+        flags = [fold(w) in canonical for w in words]
+        # Once an inflected form appears, no canonical form may follow it.
+        self.assertEqual(flags, sorted(flags, reverse=True))
+        # Each group is alphabetical.
+        for wanted in (True, False):
+            keys = [fold(w) for w, is_canonical in zip(words, flags) if is_canonical is wanted]
+            self.assertEqual(keys, sorted(keys))
+
+    @unittest.skipUnless(REPO_HAS_DICTIONARY, "dictionary.db not built — run `task db:dictionary`")
+    def test_the_infinitive_surfaces_for_the_prefix_a_client_types(self):
+        # The regression this ordering exists for: `mang` is what a conjugation
+        # client sends, and `mangiare` must be inside a default-sized window
+        # rather than 37th behind `mangiai`, `mangiammo` and the rest.
+        matches = api.complete(q="mang", pos="verb", limit=5, api_key=api.API_KEY)
+        self.assertIn("mangiare", matches.data.matches)
+
+        wide = api.complete(q="mang", pos="verb", limit=100, api_key=api.API_KEY)
+        words = wide.data.matches
+        # `manganai` and `mangana` sort before `mangiare` alphabetically, yet
+        # follow it here — that is the whole point of the split.
+        self.assertLess(words.index("mangiare"), words.index("manganai"))
+        self.assertLess(words.index("mangiare"), words.index("mangana"))
+
+        # The narrower prefix puts it first outright.
+        tight = api.complete(q="mangi", pos="verb", limit=5, api_key=api.API_KEY)
+        self.assertEqual(tight.data.matches[0], "mangiare")
+
+    @unittest.skipUnless(REPO_HAS_DICTIONARY, "dictionary.db not built — run `task db:dictionary`")
+    def test_inflected_verb_forms_are_still_reachable(self):
+        # Canonical-first reorders results; it must not remove any of them.
+        words = api.complete(
+            q="mang", pos="verb", limit=100, api_key=api.API_KEY
+        ).data.matches
+        self.assertEqual(len(words), 100)
+        # Both halves are represented: the infinitive group ...
+        self.assertIn("manganare", words)
+        # ... and inflected forms, which simply follow it.
+        for form in ("mangana", "manganai", "manganato", "mangerà"):
+            self.assertIn(form, words)
 
     @unittest.skipUnless(REPO_HAS_DICTIONARY, "dictionary.db not built — run `task db:dictionary`")
     def test_pos_filter_changes_the_result(self):

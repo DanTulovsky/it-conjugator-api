@@ -6,12 +6,18 @@ can never go stale — there is no cached artifact to generate or invalidate.
 
 Structure::
 
-    buckets[pos]   -> sorted, deduped list of folded keys
+    buckets[pos]   -> (canonical keys, other keys), each sorted and deduped
     overrides[pos] -> {folded key: real spelling}, only where they differ
 
 A "folded key" is the word lower-cased with accents stripped, so typing
 ``citta`` finds ``città``. The real spelling is recovered from ``overrides``,
 falling back to the key itself.
+
+Each bucket is split in two so that a query offers a word's *canonical* form
+before its inflected forms. For verbs the canonical form is the infinitive,
+which is what puts ``mangiare`` in reach of a ``limit`` of 20 for the prefix
+``mang`` instead of leaving it 37th behind ``mangiai``, ``mangiammo`` and the
+rest. See :func:`_is_canonical`.
 
 ``q`` is expected to be a non-blank prefix; rejecting a blank one is the API
 layer's job.
@@ -49,8 +55,35 @@ def fold(word: str) -> str:
     return word.lower().translate(FOLD)
 
 
+#: Italian infinitive endings. Used to decide a verb's canonical form.
+INFINITIVE_ENDINGS = ("are", "ere", "ire", "arre", "erre", "orre", "urre")
+
+
+def _is_canonical(pos: str, folded_key: str, is_lemma: bool) -> bool:
+    """Whether ``folded_key`` is the canonical form a client should be offered first.
+
+    For verbs that means the infinitive. ``is_lemma`` alone is NOT enough:
+    Wiktionary gives pronominal and clitic verbs their own entries, so it flags
+    ~48,000 verb keys as lemmas — only about a fifth of which are infinitives
+    (``abbacchiarsi``, ``mangiarla`` and ``abbacchiandoci`` are all "lemmas").
+    Requiring the infinitive ending is what actually lifts ``mangiare`` to the
+    top of a ``mang`` completion.
+
+    Every other part of speech is left unsplit — they keep plain alphabetical
+    order — because only verbs have a canonical form a client must be able to
+    reach: the one ``/conjugate`` accepts.
+    """
+    if pos != "verb":
+        return True
+    return is_lemma and folded_key.endswith(INFINITIVE_ENDINGS)
+
+
 class Index:
     """A prefix lookup over the dictionary, split into parts-of-speech buckets.
+
+    Each bucket holds two sorted key lists: canonical forms first (see
+    :func:`_is_canonical`), then everything else. Queries emit a bucket's
+    canonical matches before its inflected ones.
 
     Immutable once built; build one with :func:`build_index`.
     """
@@ -59,7 +92,7 @@ class Index:
 
     def __init__(
         self,
-        buckets: dict[str, list[str]],
+        buckets: dict[str, tuple[list[str], list[str]]],
         overrides: dict[str, dict[str, str]],
     ) -> None:
         self.buckets = buckets
@@ -71,7 +104,9 @@ class Index:
 
     def count(self) -> int:
         """Total indexed keys. A word counts once per part of speech it has."""
-        return sum(len(keys) for keys in self.buckets.values())
+        return sum(
+            len(canonical) + len(other) for canonical, other in self.buckets.values()
+        )
 
     def complete(
         self,
@@ -85,10 +120,11 @@ class Index:
         By default ``q`` is a prefix. With ``substring=True`` it may appear
         anywhere in the word — that path scans whole buckets, so it is opt-in.
         ``pos`` restricts the search to those parts of speech; ``None`` searches
-        every bucket. Results are ordered by folded key, which is alphabetical
-        ignoring case and accents.
+        every bucket.
 
-        ``limit`` is clamped to 1-100 rather than rejected.
+        Canonical forms (verb infinitives) come first, then inflected forms;
+        within each group, alphabetical by folded key (ignoring case and
+        accents). ``limit`` is clamped to 1-100 rather than rejected.
         """
         # Clamp in one place, so no caller can trip the emit loop with 0/-1.
         limit = max(1, min(int(limit), 100))
@@ -97,16 +133,26 @@ class Index:
         if not key:
             return []
 
-        streams = []
-        for name in self._selected(pos):
-            stream = (
-                self._substring_stream(name, key)
-                if substring
-                else self._prefix_stream(name, key)
-            )
-            if stream is not None:
-                streams.append(stream)
-        return self._emit(streams, limit)
+        positions = self._selected(pos)
+        seen: set[str] = set()
+        out: list[str] = []
+        # Two passes over the same buckets: canonical forms first, then the
+        # rest. This is what keeps `mangiare` visible for the prefix `mang`
+        # instead of burying it behind 36 inflected forms.
+        for canonical in (True, False):
+            streams = []
+            for name in positions:
+                stream = (
+                    self._substring_stream(name, key, canonical)
+                    if substring
+                    else self._prefix_stream(name, key, canonical)
+                )
+                if stream is not None:
+                    streams.append(stream)
+            out = self._emit(streams, limit, seen, out)
+            if len(out) >= limit:
+                break
+        return out
 
     def _selected(self, pos: list[str] | None) -> list[str]:
         """The buckets to search. Unknown POS names select nothing."""
@@ -114,27 +160,35 @@ class Index:
             return list(self.buckets)
         return [name for name in pos if name in self.buckets]
 
-    def _prefix_stream(self, pos: str, key: str) -> Iterator[tuple[str, str]] | None:
+    def _keys(self, pos: str, canonical: bool) -> list[str]:
+        """The sorted key list for one bucket: canonical forms, or the rest."""
+        return self.buckets[pos][0 if canonical else 1]
+
+    def _prefix_stream(
+        self, pos: str, key: str, canonical: bool
+    ) -> Iterator[tuple[str, str]] | None:
         """``(folded key, pos)`` pairs for every key in ``pos`` starting with ``key``.
 
         Returns ``None`` when the bucket holds no match, so that a query hitting
         a single bucket can skip the merge entirely.
         """
-        keys = self.buckets[pos]
+        keys = self._keys(pos, canonical)
         start = bisect.bisect_left(keys, key)
         if start >= len(keys) or not keys[start].startswith(key):
             return None
         return self._run(pos, keys, start, key)
 
-    def _substring_stream(self, pos: str, key: str) -> Iterator[tuple[str, str]]:
+    def _substring_stream(
+        self, pos: str, key: str, canonical: bool
+    ) -> Iterator[tuple[str, str]]:
         """``(key, pos)`` for every key in ``pos`` containing ``key``, in order.
 
         Always returns a generator (possibly empty), never ``None``: the whole
-        bucket has to be scanned either way, so there is no cheap bail-out to
+        key list has to be scanned either way, so there is no cheap bail-out to
         detect. Measured at 0.06 ms for a common fragment and 10.5 ms for a
         fragment that matches nothing anywhere.
         """
-        return ((candidate, pos) for candidate in self.buckets[pos] if key in candidate)
+        return ((candidate, pos) for candidate in self._keys(pos, canonical) if key in candidate)
 
     @staticmethod
     def _run(pos: str, keys: list[str], start: int, key: str) -> Iterator[tuple[str, str]]:
@@ -148,21 +202,31 @@ class Index:
             yield keys[i], pos
             i += 1
 
-    def _emit(self, streams: list[Iterator[tuple[str, str]]], limit: int) -> list[str]:
+    def _emit(
+        self,
+        streams: list[Iterator[tuple[str, str]]],
+        limit: int,
+        seen: set[str] | None = None,
+        out: list[str] | None = None,
+    ) -> list[str]:
         """Resolve ``(key, pos)`` pairs to real spellings, deduped, up to ``limit``.
+
+        ``seen`` and ``out`` can be threaded in so the canonical and inflected
+        passes share one dedup set and one result list — a word can be canonical
+        for one part of speech and inflected for another.
 
         A single stream skips :func:`heapq.merge` — that is the hot path
         (``q=mangi&pos=verb``) and the merge is ~40x slower than the plain walk.
         """
+        seen = set() if seen is None else seen
+        out = [] if out is None else out
         if not streams:
-            return []
+            return out
 
         source: Iterator[tuple[str, str]]
         source = streams[0] if len(streams) == 1 else heapq.merge(*streams)
 
         overrides = self.overrides
-        seen: set[str] = set()
-        out: list[str] = []
         for key, pos in source:
             # The same word can be several parts of speech, so it appears in
             # several buckets; emit it once.
@@ -183,24 +247,32 @@ def build_index(db_path: str = DICTIONARY_DB_PATH) -> Index:
     of compressed entry blobs that this never needs, and holding 623k rows in a
     list at once costs tens of megabytes for nothing.
     """
-    buckets: dict[str, list[str]] = {}
+    buckets: dict[str, tuple[list[str], list[str]]] = {}
     overrides: dict[str, dict[str, str]] = {}
 
     conn = sqlite3.connect(db_path)
     try:
-        for word, pos in conn.execute("SELECT word, pos FROM entries"):
+        for word, pos, is_lemma in conn.execute(
+            "SELECT word, pos, is_lemma FROM entries"
+        ):
             key = fold(word)
             if key != word:
                 # First spelling in dump order wins when several fold to one key
                 # (e.g. `manco` and `mancò`). The real spelling is cosmetic here:
                 # whichever is returned, the client can act on it.
                 overrides.setdefault(pos, {}).setdefault(key, word)
-            buckets.setdefault(pos, []).append(key)
+            canonical, other = buckets.setdefault(pos, ([], []))
+            target = canonical if _is_canonical(pos, key, bool(is_lemma)) else other
+            target.append(key)
     finally:
         conn.close()
 
-    for pos, keys in buckets.items():
-        buckets[pos] = sorted(set(keys))
+    for pos, (canonical, other) in buckets.items():
+        # A word can appear in this POS both as a lemma and as a form; canonical
+        # wins, and subtracting it keeps the two halves disjoint so `count()`
+        # still reports distinct (word, pos) keys.
+        canonical_set = set(canonical)
+        buckets[pos] = (sorted(canonical_set), sorted(set(other) - canonical_set))
     return Index(buckets, overrides)
 
 

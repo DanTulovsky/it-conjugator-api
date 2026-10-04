@@ -320,11 +320,14 @@ part-of-speech bucket — the whole index when no `pos` is given — about 10 ms
 the worst case (versus tens of microseconds for a prefix), so use it on
 explicit request only.
 
-**Ordering is alphabetical, not by usefulness.** For `q=mangi&pos=verb` the
-infinitive `mangiare` is the 37th match, behind inflected forms like `mangiai`
-and `mangiammo`. That is the documented trade-off of ordering by folded key; if
-a conjugation dropdown needs infinitives first, that is a ranking change to make
-deliberately rather than something this endpoint guesses.
+**Verb infinitives come first.** For `q=mang&pos=verb` the results lead with the
+infinitives that start that way — `manganare`, `manganellare`, `mangiare`, … —
+before any inflected form, so `mangiare` lands 3rd rather than 37th. Within each
+group, results are alphabetical ignoring case and accents, and inflected forms
+are still returned in full: they simply follow the infinitives. Only the verb
+bucket is ordered this way. Wiktionary gives pronominal verbs (`abbacchiarsi`,
+`mangiarla`) their own entries and marks them as lemmas, so "lemma first" would
+not have been enough to surface the infinitive — it takes the infinitive ending.
 
 **An unmatched prefix is not an error.** The response is `200` with
 `success: true`, `matches: []`, and a `note` — an unknown prefix is a normal

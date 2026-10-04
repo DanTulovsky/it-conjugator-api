@@ -1578,11 +1578,21 @@ depends on the built dictionary was measured, not guessed:
   `["città", "città santa", "città sante", "città stato", "città vecchia"]`,
   which is the README's example output.
 
-**Known limitation, deliberately not fixed.** Ordering is by folded key only, so
-for `q=mangi&pos=verb` the infinitive `mangiare` is the 37th match, behind
-inflected forms such as `mangiai` and `mangiammo`. That follows from the approved
-spec ("alphabetical; no ranking") and is documented in the README rather than
-worked around. `test_results_are_ordered_by_folded_key` pins the current
-ordering, so adding lemma-first ranking later is a deliberate change to a test
-that names the behaviour. This is worth revisiting if the conjugation client
-actually drives its verb picker from `/complete`.
+**Known limitation, deliberately not fixed — RESOLVED by a follow-up.** Ordering
+was by folded key only, so for `q=mangi&pos=verb` the infinitive `mangiare` was
+the 37th match, behind inflected forms such as `mangiai` and `mangiammo`. That
+followed from the approved spec ("alphabetical; no ranking") and was documented in
+the README rather than worked around.
+
+Follow-up implemented (verbs only): each bucket is now split into a *canonical*
+half and an *inflected* half, and a query emits the canonical half first, so
+`mangiare` is 3rd of 20 for the prefix `mang`. Measurement killed two candidate
+fixes before either shipped: `is_lemma`-first ordering does **not** work
+(Wiktionary marks pronominal verbs — `abbacchiarsi`, `mangiarla`,
+`abbacchiandoci` — as lemmas, so the infinitive stayed outside the top 20), and
+`verbs.db`'s `infinitive` column is not a plain-infinitive list either. The rule
+that works is `is_lemma AND ends with -are/-ere/-ire/-rre`: 10,653 of 384,652
+verb keys. See the spec's "Canonical-first ordering" section. The test that pinned
+the old ordering was renamed to
+`test_results_are_canonical_first_then_alphabetical` — the deliberate change that
+named behaviour was always going to require.
