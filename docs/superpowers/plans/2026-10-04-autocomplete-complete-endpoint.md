@@ -1258,7 +1258,7 @@ def health() -> HealthResponse:
 
 Run: `.venv/bin/python -m unittest tests.test_autocomplete -v`
 
-Expected: PASS — 47 tests.
+Expected: PASS — 48 tests.
 
 - [ ] **Step 6: Regenerate the contract again**
 
@@ -1278,7 +1278,7 @@ Expected: PASS.
 
 Run: `task test`
 
-Expected: `Ran 97 tests ... OK`.
+Expected: `Ran 98 tests ... OK`.
 
 - [ ] **Step 8: Confirm the app boots and the endpoint answers over real HTTP**
 
@@ -1447,7 +1447,7 @@ Expected: `db:verbs` and `db:dictionary` — both report up to date (their
 
 Run: `task test`
 
-Expected: `Ran 97 tests ... OK`. If any test fails only when the databases were
+Expected: `Ran 98 tests ... OK`. If any test fails only when the databases were
 rebuilt, the index build has a dependency on table row order; investigate rather
 than reordering the test.
 
@@ -1532,7 +1532,8 @@ is written in Task 2 and reset by a test in Task 4, which is the same name.
 such by `HealthResponse.autocomplete` in Task 4. `fold` is imported into the
 test module in Task 1 and used by Task 3's tests.
 Test counts, assuming every method above is added verbatim:
-49 (baseline, measured) → 64 (Task 1) → 77 (Task 2) → 93 (Task 3) → 97 (Task 4).
+49 (baseline, measured) → 64 (Task 1) → 77 (Task 2) → 93 (Task 3) → 98 (Task 4, after the
+review fixes below added one test).
 
 **Corrections already applied to this plan.** Each was a real defect found by
 running the plan's own code and commands, not a style preference:
@@ -1548,6 +1549,12 @@ running the plan's own code and commands, not a style preference:
   which can strand a server or fail on process-group reaping, and
   `fastapi.testclient` is unusable without `httpx`. Replaced with `TestClient`
   (and `httpx` added to `requirements.txt`, which the user approved).
+- Task 4's review fixes (applied after review, so the counts above include them): the startup
+  index build is wrapped so a present-but-unreadable `dictionary.db` fails startup with the same
+  curated "The API cannot start … Fix, then restart" message as the sibling checks, instead of a
+  raw traceback; `/health` gained a test that pins "reports without building"; and the two
+  `TestIndexStartup` methods that mutate the `autocomplete_core._index` / `_build_ms` globals now
+  save and restore them instead of forcing `None`.
 - Task 5 previously ended with a step that moved `dictionary.db` aside to check
   the startup guard. It contained a leftover no-op line and would have
   invalidated Task's `db:dictionary` checksum, risking a surprise multi-minute
