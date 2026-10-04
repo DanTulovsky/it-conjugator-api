@@ -134,8 +134,9 @@ you expose this publicly.
 | GET    | `/health`         | no   | Liveness + which databases are loaded      |
 | GET    | `/conjugate?v=`   | yes  | Conjugation table for a verb or inflected form |
 | GET    | `/define?v=`      | yes  | Full dictionary entry for a word           |
+| GET    | `/complete?q=`    | yes  | Words starting with a prefix, POs filterable |
 
-Both data endpoints return **HTTP 200** for a well-formed request even when the
+All three data endpoints return **HTTP 200** for a well-formed request even when the
 result is empty — a not-found word is **not** a 404. Branch on the `success`
 field (see [Error handling](#error-handling)).
 
@@ -268,6 +269,61 @@ An inflected word resolves to its own entry, which links back to the lemma via
 > **Payload size.** `/define` has no filters; entries vary from a few hundred bytes
 > to a few KB (a verb's `forms[]` lists every conjugation). If you only need
 > conjugations, prefer `/conjugate`.
+
+### `GET /complete`
+
+Autocomplete: given a partial word, returns dictionary words that start with it.
+Use it to drive a dropdown and then call `/define` or `/conjugate` with the
+chosen word.
+
+| Query param | Type   | Default | Notes |
+|-------------|--------|---------|-------|
+| `q`         | string | —       | **required**; the partial word |
+| `pos`       | CSV    | all     | restrict to parts of speech, e.g. `verb` or `verb,noun` |
+| `limit`     | int    | `20`    | maximum completions; clamped to 1–100 |
+| `substring` | bool   | `false` | match anywhere in the word, not just at the start |
+
+Matching ignores case and accents: `citta` finds `città`. `pos` values are
+case-sensitive and are the dictionary's POS names — `verb`, `noun`, `adj`,
+`name`, `adv`, `suffix`, `prep_phrase`, `prefix`, `intj`, `pron`, `phrase`,
+`conj`, `num`, `det`, `prep`, `proverb`, `contraction`, `character`, `article`,
+`symbol`, `punct`, `particle`, `interfix`. An unknown value is a `400` that lists
+them.
+
+Results are ordered by their case- and accent-folded form. A conjugation client
+wants `pos=verb`:
+
+```bash
+curl -H "X-API-Key: $KEY" "$API/complete?q=citt&pos=noun&limit=5"
+```
+
+```json
+{
+  "success": true,
+  "requested": {"q": "citt", "pos": ["noun"], "limit": 5, "substring": false},
+  "data": {
+    "queried": "citt",
+    "pos": ["noun"],
+    "matches": ["città", "città santa", "città sante", "città stato", "città vecchia"]
+  }
+}
+```
+
+**Prefix, not substring.** `q=ttà` folds to `tta` and matches nothing by
+default, because no word starts with `tta`. Pass `substring=true` and it finds
+`abballotta`, `abballottai`, and the rest. That path scans the whole index
+(about 10 ms in the worst case, versus tens of microseconds for a prefix), so
+use it on explicit request only.
+
+**Ordering is alphabetical, not by usefulness.** For `q=mangi&pos=verb` the
+infinitive `mangiare` is the 37th match, behind inflected forms like `mangiai`
+and `mangiammo`. That is the documented trade-off of ordering by folded key; if
+a conjugation dropdown needs infinitives first, that is a ranking change to make
+deliberately rather than something this endpoint guesses.
+
+**An unmatched prefix is not an error.** The response is `200` with
+`success: true`, `matches: []`, and a `note` — an unknown prefix is a normal
+answer to a normal question. Only a blank `q` or an unknown `pos` is a `400`.
 
 ### Error handling
 
