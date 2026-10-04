@@ -85,10 +85,10 @@ string for the same reason.
 New module `app/autocomplete_core.py`. Two dicts, built once at startup:
 
 - `buckets: dict[str, list[str]]` — POS → sorted, deduped list of *folded keys*.
-  This is the search surface: 603,573 keys across 23 buckets
+  This is the search surface: 603,520 keys across 23 buckets
   (`verb` alone is 384,651).
 - `overrides: dict[str, dict[str, str]]` — POS → `{folded key: real spelling}`
-  for the 44,838 entries whose spelling differs from their key, so results show
+  for the 45,261 entries whose spelling differs from their key, so results show
   `città` and `Manco` rather than `citta` and `manco`. Keyed per POS, so the key
   `manco` resolves to `mancò` in the `verb` bucket and `Manco` in the `name`
   bucket.
@@ -237,8 +237,11 @@ index or query changes.
 
 Each with its ceiling and the upgrade path if it is ever hit:
 
-- **No ranking.** Alphabetical only. Add frequency or lemma-first ordering when
-  a client reports the dropdown is unhelpful.
+- **No ranking.** Alphabetical only. Concretely, for `q=mangi&pos=verb` the
+  infinitive `mangiare` is the 37th match, behind inflected forms such as
+  `mangiai` and `mangiammo` — pure key order puts the useful answer out of reach
+  of a default `limit` of 20. Add lemma-first ordering when a client confirms the
+  dropdown is unhelpful; the README documents the behaviour in the meantime.
 - **No substring index.** A linear scan (10.5 ms worst case) stands in for a
   trigram or suffix-array index. Build one if substring becomes the common path.
 - **No prebuilt index file.** 0.65 s of startup is cheaper than an artifact to
