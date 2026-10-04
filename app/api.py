@@ -99,7 +99,17 @@ async def lifespan(app: FastAPI):
     # The prefix index is rebuilt from dictionary.db on every start, so it can
     # never be stale — there is no artifact to invalidate. ~0.65 s and ~115 MB
     # on the current dictionary, paid here rather than by the first request.
-    autocomplete_core.ensure_index()
+    try:
+        autocomplete_core.ensure_index()
+    except Exception as exc:
+        raise RuntimeError(
+            "The API cannot start:\n\n"
+            f"The prefix index could not be built from {DICTIONARY_DB_PATH}: {exc}\n\n"
+            "This usually means dictionary.db is present but unreadable.\n"
+            "Fix, then restart:\n"
+            "    task db                        # build verbs.db + dictionary.db\n"
+            "    python3 build_dictionary_db.py # full Italian dictionary (dictionary.db)"
+        ) from exc
     yield
 
 

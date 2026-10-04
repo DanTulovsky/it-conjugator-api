@@ -401,12 +401,16 @@ class TestIndexStartup(unittest.TestCase):
 
     @unittest.skipUnless(REPO_HAS_DICTIONARY, "dictionary.db not built — run `task db:dictionary`")
     def test_lifespan_builds_the_index(self):
-        autocomplete_core._index = None
+        saved_index = autocomplete_core._index
+        saved_ms = autocomplete_core._build_ms
         try:
+            autocomplete_core._index = None
+            autocomplete_core._build_ms = None
             self.assertTrue(self._run_lifespan())
             self.assertIsNotNone(autocomplete_core._index)
         finally:
-            autocomplete_core._index = None
+            autocomplete_core._index = saved_index
+            autocomplete_core._build_ms = saved_ms
 
     @unittest.skipUnless(REPO_HAS_DICTIONARY, "dictionary.db not built — run `task db:dictionary`")
     def test_lifespan_is_happy_when_the_index_is_already_built(self):
@@ -415,9 +419,46 @@ class TestIndexStartup(unittest.TestCase):
 
     @unittest.skipUnless(REPO_HAS_DICTIONARY, "dictionary.db not built — run `task db:dictionary`")
     def test_health_reports_index_stats(self):
-        autocomplete_core.ensure_index()
-        health = api.health()
-        self.assertTrue(health.ok)
-        self.assertEqual(health.autocomplete["parts_of_speech"], 23)
-        self.assertGreater(health.autocomplete["keys"], 600_000)
-        self.assertIn("build_ms", health.autocomplete)
+        # /health must report the index WITHOUT building it: a liveness probe
+        # must not pay the build. Before the index exists the field is null and
+        # must stay that way.
+        saved_index = autocomplete_core._index
+        saved_ms = autocomplete_core._build_ms
+        try:
+            autocomplete_core._index = None
+            autocomplete_core._build_ms = None
+            api.health()
+            self.assertIsNone(
+                autocomplete_core.index_stats(),
+                "/health must not build the index",
+            )
+
+            autocomplete_core.ensure_index()
+            stats = api.health().autocomplete
+            self.assertIsNotNone(stats)
+            self.assertEqual(stats["parts_of_speech"], 23)
+            self.assertGreater(stats["keys"], 600_000)
+            self.assertIn("build_ms", stats)
+        finally:
+            autocomplete_core._index = saved_index
+            autocomplete_core._build_ms = saved_ms
+
+    @unittest.skipUnless(REPO_HAS_DICTIONARY, "dictionary.db not built — run `task db:dictionary`")
+    def test_hard_fails_when_the_index_cannot_be_built(self):
+        # A present but unreadable dictionary.db must fail startup with the
+        # curated message, not a raw traceback.
+        def _boom():
+            raise ValueError("database disk image is malformed")
+
+        original = autocomplete_core.ensure_index
+        autocomplete_core.ensure_index = _boom
+        try:
+            with self.assertRaises(RuntimeError) as ctx:
+                self._run_lifespan()
+        finally:
+            autocomplete_core.ensure_index = original
+
+        message = str(ctx.exception)
+        self.assertIn("cannot start", message)
+        self.assertIn("task db", message)
+        self.assertIn("database disk image is malformed", message)
