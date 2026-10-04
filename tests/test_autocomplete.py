@@ -23,7 +23,7 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from app import config, dictionary_core  # noqa: E402
+from app import autocomplete_core, config, dictionary_core  # noqa: E402
 from app.autocomplete_core import Index, build_index, fold  # noqa: E402
 
 # The API key is read from the environment at import time; set it before we
@@ -132,3 +132,82 @@ class TestIndexPrefix(unittest.TestCase):
         # Both spellings of the query reach the same key.
         self.assertEqual(self.index.complete("città"), ["città", "cittadino"])
         self.assertEqual(self.index.complete("CITTÀ"), ["città", "cittadino"])
+
+
+class TestIndexSubstring(unittest.TestCase):
+
+    def setUp(self):
+        self.index = _tiny_index()
+
+    def test_substring_finds_an_interior_fragment(self):
+        # `are` is a suffix, so prefix matching finds nothing.
+        self.assertEqual(self.index.complete("are", pos=["verb"]), [])
+        self.assertEqual(
+            self.index.complete("are", pos=["verb"], substring=True),
+            ["mancare", "mangiare"],
+        )
+
+    def test_substring_searches_every_bucket_by_default(self):
+        self.assertEqual(
+            self.index.complete("anc", substring=True), ["mancanza", "mancare"]
+        )
+
+    def test_substring_respects_pos(self):
+        self.assertEqual(
+            self.index.complete("anc", pos=["noun"], substring=True), ["mancanza"]
+        )
+
+    def test_substring_dedupes_across_buckets(self):
+        # `ane`: `cane` is in both buckets.
+        self.assertEqual(self.index.complete("ane", substring=True), ["cane"])
+
+    def test_substring_returns_the_real_spelling(self):
+        self.assertIn("città", self.index.complete("ttà", substring=True))
+
+    def test_substring_no_match_returns_empty(self):
+        self.assertEqual(self.index.complete("zzzz", substring=True), [])
+
+    def test_substring_respects_limit(self):
+        self.assertEqual(
+            self.index.complete("ang", pos=["verb"], limit=2, substring=True),
+            ["mangi", "mangia"],
+        )
+
+
+class TestLimitClamping(unittest.TestCase):
+    """The spec says `limit` is clamped to 1-100, not rejected."""
+
+    def setUp(self):
+        self.index = _tiny_index()
+
+    def test_zero_clamps_to_one(self):
+        self.assertEqual(len(self.index.complete("mang", pos=["verb"], limit=0)), 1)
+
+    def test_negative_clamps_to_one(self):
+        self.assertEqual(len(self.index.complete("mang", pos=["verb"], limit=-5)), 1)
+
+    def test_above_one_hundred_clamps_to_one_hundred(self):
+        # The tiny index is smaller than 100, so this only has to not explode.
+        self.assertEqual(
+            self.index.complete("mang", pos=["verb"], limit=500),
+            ["mangi", "mangia", "mangiai", "mangiare"],
+        )
+
+    def test_clamping_also_applies_to_substring(self):
+        self.assertEqual(len(self.index.complete("ang", limit=0, substring=True)), 1)
+
+
+class TestIndexCaching(unittest.TestCase):
+
+    @unittest.skipUnless(REPO_HAS_DICTIONARY, "dictionary.db not built — run `task db:dictionary`")
+    def test_ensure_index_builds_once_and_caches(self):
+        first = autocomplete_core.ensure_index()
+        self.assertIs(autocomplete_core.ensure_index(), first)
+
+    @unittest.skipUnless(REPO_HAS_DICTIONARY, "dictionary.db not built — run `task db:dictionary`")
+    def test_index_stats_describe_the_loaded_index(self):
+        autocomplete_core.ensure_index()
+        stats = autocomplete_core.index_stats()
+        self.assertIsNotNone(stats)
+        self.assertEqual(stats["parts_of_speech"], 23)
+        self.assertGreater(stats["keys"], 600_000)
