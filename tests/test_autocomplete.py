@@ -23,8 +23,8 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from app import autocomplete_core, config, dictionary_core  # noqa: E402
-from app.autocomplete_core import Index, build_index, fold  # noqa: E402
+from app import autocomplete_core, dictionary_core  # noqa: E402
+from app.autocomplete_core import Index, fold  # noqa: E402
 
 # The API key is read from the environment at import time; set it before we
 # import app.api so the endpoints accept our test key.

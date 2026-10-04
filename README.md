@@ -138,7 +138,9 @@ you expose this publicly.
 
 All three data endpoints return **HTTP 200** for a well-formed request even when the
 result is empty — a not-found word is **not** a 404. Branch on the `success`
-field (see [Error handling](#error-handling)).
+field (see [Error handling](#error-handling)). (`/complete` always reports
+`success: true`; an unmatched prefix is signalled by an empty `matches` list
+and a `note`, not by `success: false`.)
 
 ### `GET /conjugate`
 
@@ -278,7 +280,7 @@ chosen word.
 
 | Query param | Type   | Default | Notes |
 |-------------|--------|---------|-------|
-| `q`         | string | —       | **required**; the partial word |
+| `q`         | string | —       | **required**, non-empty; the partial word |
 | `pos`       | CSV    | all     | restrict to parts of speech, e.g. `verb` or `verb,noun` |
 | `limit`     | int    | `20`    | maximum completions; clamped to 1–100 |
 | `substring` | bool   | `false` | match anywhere in the word, not just at the start |
@@ -301,6 +303,8 @@ curl -H "X-API-Key: $KEY" "$API/complete?q=citt&pos=noun&limit=5"
 {
   "success": true,
   "requested": {"q": "citt", "pos": ["noun"], "limit": 5, "substring": false},
+  "note": null,
+  "error": null,
   "data": {
     "queried": "citt",
     "pos": ["noun"],
@@ -311,9 +315,10 @@ curl -H "X-API-Key: $KEY" "$API/complete?q=citt&pos=noun&limit=5"
 
 **Prefix, not substring.** `q=ttà` folds to `tta` and matches nothing by
 default, because no word starts with `tta`. Pass `substring=true` and it finds
-`abballotta`, `abballottai`, and the rest. That path scans the whole index
-(about 10 ms in the worst case, versus tens of microseconds for a prefix), so
-use it on explicit request only.
+`abballotta`, `abballottai`, and the rest. That path scans every selected
+part-of-speech bucket — the whole index when no `pos` is given — about 10 ms in
+the worst case (versus tens of microseconds for a prefix), so use it on
+explicit request only.
 
 **Ordering is alphabetical, not by usefulness.** For `q=mangi&pos=verb` the
 infinitive `mangiare` is the 37th match, behind inflected forms like `mangiai`
@@ -324,6 +329,8 @@ deliberately rather than something this endpoint guesses.
 **An unmatched prefix is not an error.** The response is `200` with
 `success: true`, `matches: []`, and a `note` — an unknown prefix is a normal
 answer to a normal question. Only a blank `q` or an unknown `pos` is a `400`.
+A whitespace-only `q` is that `400`; omitting `q` entirely, or passing it
+empty, is rejected earlier by request validation as a `422`.
 
 ### Error handling
 
