@@ -376,7 +376,7 @@ class TestOpenAPIContract(unittest.TestCase):
     def test_lists_all_endpoints(self):
         self.assertEqual(
             sorted(self.spec["paths"]),
-            ["/conjugate", "/define", "/health"],
+            ["/complete", "/conjugate", "/define", "/health"],
         )
 
     def test_declares_api_key_security_scheme(self):
@@ -386,9 +386,19 @@ class TestOpenAPIContract(unittest.TestCase):
         self.assertEqual(scheme["name"], "X-API-Key")
 
     def test_secured_endpoints_require_the_key(self):
-        for path in ("/conjugate", "/define"):
+        for path in ("/complete", "/conjugate", "/define"):
             self.assertIn("security", self.spec["paths"][path]["get"],
                           f"{path} should declare security")
+
+    def test_complete_request_and_response_are_typed(self):
+        get = self.spec["paths"]["/complete"]["get"]
+        names = [p["name"] for p in get["parameters"]]
+        self.assertEqual(names, ["q", "pos", "limit", "substring"])
+        ref = get["responses"]["200"]["content"]["application/json"]["schema"]["$ref"]
+        self.assertTrue(ref.endswith("/CompleteResponse"))
+        schemas = self.spec["components"]["schemas"]
+        for name in ("CompleteQuery", "CompletionData", "CompleteResponse"):
+            self.assertIn(name, schemas)
 
     def test_define_request_and_response_are_typed(self):
         get = self.spec["paths"]["/define"]["get"]

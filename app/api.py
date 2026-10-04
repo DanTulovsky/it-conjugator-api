@@ -9,12 +9,16 @@ from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 from pydantic import ValidationError
 
+from . import autocomplete_core
 from .config import DICTIONARY_DB_PATH, SWAGGER_PATH, VERBS_DB_PATH
 from .db_core import get_conjugations
 from .dictionary_core import get_definitions
 from .filters import _split_csv_preserving_phrases, apply_filters
 from .models import (
     APIResponse,
+    CompleteQuery,
+    CompleteResponse,
+    CompletionData,
     ConjugateQuery,
     ConjugationResponse,
     DefineResponse,
@@ -234,3 +238,78 @@ def define(
 
     except Exception as e:
         return DefineResponse(success=False, error=str(e), requested=query)
+
+
+@app.get(
+    "/complete",
+    response_model=CompleteResponse,
+    tags=["dictionary"],
+    summary="Prefix-complete an Italian word",
+    responses={401: {"description": "Invalid or missing X-API-Key"}},
+)
+def complete(
+    q: str = Query(..., min_length=1, description="Partial word to complete"),
+    pos: str | None = Query(
+        None,
+        description="CSV of parts of speech to restrict to (e.g. verb,noun); omitted = all",
+    ),
+    limit: int = Query(20, description="Maximum completions, clamped to 1-100"),
+    substring: bool = Query(
+        False, description="If true, match anywhere in the word instead of as a prefix"
+    ),
+    api_key: str | None = Security(api_key_header),
+):
+    """Return dictionary words beginning with ``q``, for autocomplete.
+
+    Matching ignores case and accents, so ``citta`` finds ``città``. Pass ``pos``
+    to restrict to parts of speech — a conjugation client wants ``pos=verb``.
+    With ``substring=true`` ``q`` may appear anywhere in the word.
+
+    An unmatched prefix is not an error: the response is HTTP 200 with
+    ``success: true`` and an empty ``matches`` list.
+    """
+    if not API_KEY or api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key")
+
+    # A direct Python call (which the unit tests make) does not run FastAPI's
+    # dependency machinery, so the ``Query(...)`` defaults arrive as the
+    # parameter objects rather than their values. HTTP requests always deliver
+    # real values. Fall back to the declared defaults so both paths behave the
+    # same.
+    limit = getattr(limit, "default", limit)
+    substring = getattr(substring, "default", substring)
+
+    index = autocomplete_core.ensure_index()
+
+    query = q.strip()
+    if not query:
+        return JSONResponse(
+            status_code=400,
+            content=CompleteResponse(
+                success=False, error="Parameter 'q' must not be empty."
+            ).model_dump(),
+        )
+
+    pos_list = _csv_to_list(pos)
+    unknown = [p for p in (pos_list or []) if p not in index.buckets]
+    if unknown:
+        return JSONResponse(
+            status_code=400,
+            content=CompleteResponse(
+                success=False,
+                error=(
+                    f"Unknown part(s) of speech: {', '.join(unknown)}. "
+                    f"Allowed: {', '.join(index.pos_values())}"
+                ),
+            ).model_dump(),
+        )
+
+    matches = index.complete(query, pos=pos_list, limit=limit, substring=substring)
+    return CompleteResponse(
+        success=True,
+        requested=CompleteQuery(
+            q=query, pos=pos_list, limit=limit, substring=substring
+        ),
+        note=None if matches else "No completions for this prefix.",
+        data=CompletionData(queried=query, pos=pos_list, matches=matches),
+    )

@@ -211,3 +211,158 @@ class TestIndexCaching(unittest.TestCase):
         self.assertIsNotNone(stats)
         self.assertEqual(stats["parts_of_speech"], 23)
         self.assertGreater(stats["keys"], 600_000)
+
+
+class TestCompleteEndpoint(unittest.TestCase):
+    """The endpoint gates on the API key exactly like /conjugate and /define."""
+
+    def test_requires_api_key(self):
+        from fastapi import HTTPException
+
+        with self.assertRaises(HTTPException) as ctx:
+            api.complete(q="cane", api_key=None)
+        self.assertEqual(ctx.exception.status_code, 401)
+
+    def test_rejects_a_blank_query(self):
+        import json
+
+        resp = api.complete(q="   ", api_key=api.API_KEY)
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("'q'", json.loads(resp.body)["error"])
+
+    @unittest.skipUnless(REPO_HAS_DICTIONARY, "dictionary.db not built — run `task db:dictionary`")
+    def test_rejects_an_unknown_part_of_speech(self):
+        import json
+
+        resp = api.complete(q="mang", pos="bogus", api_key=api.API_KEY)
+        self.assertEqual(resp.status_code, 400)
+        error = json.loads(resp.body)["error"]
+        self.assertIn("bogus", error)
+        # The message tells the caller what is actually allowed.
+        self.assertIn("verb", error)
+
+    @unittest.skipUnless(REPO_HAS_DICTIONARY, "dictionary.db not built — run `task db:dictionary`")
+    def test_completes_a_verb_prefix(self):
+        # `mangiare` is the 37th key for the prefix `mangi`, so a shorter prefix
+        # would not reach it inside the default limit. Verified against the
+        # built dictionary: 138 verb keys start with `mangi`.
+        resp = api.complete(q="mangiare", pos="verb", limit=5, api_key=api.API_KEY)
+        self.assertTrue(resp.success)
+        self.assertEqual(resp.requested.q, "mangiare")
+        self.assertEqual(resp.requested.pos, ["verb"])
+        self.assertEqual(resp.data.queried, "mangiare")
+        self.assertEqual(resp.data.pos, ["verb"])
+        self.assertIn("mangiare", resp.data.matches)
+        self.assertTrue(all(fold(w).startswith("mangiare") for w in resp.data.matches))
+
+    @unittest.skipUnless(REPO_HAS_DICTIONARY, "dictionary.db not built — run `task db:dictionary`")
+    def test_results_are_ordered_by_folded_key(self):
+        # The documented ordering: alphabetical ignoring case and accents. This
+        # pins it, so switching to lemma-first ranking later is a deliberate
+        # test change rather than a silent one.
+        matches = api.complete(q="mangi", pos="verb", limit=50, api_key=api.API_KEY)
+        folded = [fold(w) for w in matches.data.matches]
+        self.assertEqual(folded, sorted(folded))
+        self.assertEqual(len(folded), 50)
+
+    @unittest.skipUnless(REPO_HAS_DICTIONARY, "dictionary.db not built — run `task db:dictionary`")
+    def test_pos_filter_changes_the_result(self):
+        verbs = api.complete(q="mang", pos="verb", api_key=api.API_KEY).data.matches
+        nouns = api.complete(q="mang", pos="noun", api_key=api.API_KEY).data.matches
+        self.assertTrue(verbs)
+        self.assertNotEqual(verbs, nouns)
+
+    @unittest.skipUnless(REPO_HAS_DICTIONARY, "dictionary.db not built — run `task db:dictionary`")
+    def test_omitting_pos_reports_no_filter(self):
+        resp = api.complete(q="mang", api_key=api.API_KEY)
+        self.assertIsNone(resp.requested.pos)
+        self.assertIsNone(resp.data.pos)
+
+    @unittest.skipUnless(REPO_HAS_DICTIONARY, "dictionary.db not built — run `task db:dictionary`")
+    def test_unmatched_prefix_is_an_empty_success_not_an_error(self):
+        resp = api.complete(q="zzzznotawordzzzz", api_key=api.API_KEY)
+        self.assertTrue(resp.success)
+        self.assertEqual(resp.data.matches, [])
+        self.assertIsNotNone(resp.note)
+
+    @unittest.skipUnless(REPO_HAS_DICTIONARY, "dictionary.db not built — run `task db:dictionary`")
+    def test_limit_is_clamped_not_rejected(self):
+        self.assertEqual(len(api.complete(q="a", limit=0, api_key=api.API_KEY).data.matches), 1)
+        self.assertEqual(len(api.complete(q="a", limit=-5, api_key=api.API_KEY).data.matches), 1)
+        self.assertLessEqual(
+            len(api.complete(q="a", limit=500, api_key=api.API_KEY).data.matches), 100
+        )
+
+    @unittest.skipUnless(REPO_HAS_DICTIONARY, "dictionary.db not built — run `task db:dictionary`")
+    def test_accent_insensitive_query(self):
+        resp = api.complete(q="citta", pos="noun", api_key=api.API_KEY)
+        self.assertIn("città", resp.data.matches)
+
+    @unittest.skipUnless(REPO_HAS_DICTIONARY, "dictionary.db not built — run `task db:dictionary`")
+    def test_substring_is_opt_in(self):
+        # `ttà` folds to `tta`. Verified against the built dictionary: no verb
+        # starts with `tta` (so the prefix path finds nothing), but many contain
+        # it (`abballotta`, `abballottai`, ...), so the substring path does not.
+        prefix_only = api.complete(q="ttà", pos="verb", api_key=api.API_KEY).data.matches
+        with_substring = api.complete(
+            q="ttà", pos="verb", substring=True, limit=10, api_key=api.API_KEY
+        ).data.matches
+        self.assertEqual(prefix_only, [])
+        self.assertTrue(with_substring)
+        self.assertTrue(any(not fold(w).startswith("tta") for w in with_substring))
+
+
+class TestCompleteHTTP(unittest.TestCase):
+    """The real HTTP surface, through Starlette's ASGI stack.
+
+    The tests above call the endpoint function directly. These go over HTTP, so
+    they prove the status codes, headers and JSON bodies a client actually
+    receives — which is the part a direct call cannot vouch for.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        from fastapi.testclient import TestClient
+
+        # Deliberately NOT used as a context manager: that would run the
+        # lifespan (database checks, contract check, index build), none of which
+        # these tests are about. Without startup, `complete` still works because
+        # it calls ensure_index() lazily.
+        cls.client = TestClient(api.app)
+
+    def _get(self, **params):
+        return self.client.get(
+            "/complete", params=params, headers={"X-API-Key": api.API_KEY}
+        )
+
+    def test_missing_key_is_401(self):
+        resp = self.client.get("/complete", params={"q": "cane"})
+        self.assertEqual(resp.status_code, 401)
+
+    def test_blank_query_is_400(self):
+        resp = self._get(q="   ")
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("'q'", resp.json()["error"])
+
+    @unittest.skipUnless(REPO_HAS_DICTIONARY, "dictionary.db not built — run `task db:dictionary`")
+    def test_unknown_pos_is_400(self):
+        resp = self._get(q="mang", pos="bogus")
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("bogus", resp.json()["error"])
+
+    @unittest.skipUnless(REPO_HAS_DICTIONARY, "dictionary.db not built — run `task db:dictionary`")
+    def test_success_is_200_with_the_documented_shape(self):
+        resp = self._get(q="citt", pos="noun", limit=5)
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertTrue(body["success"])
+        self.assertEqual(body["requested"]["q"], "citt")
+        self.assertEqual(body["requested"]["pos"], ["noun"])
+        self.assertEqual(body["requested"]["limit"], 5)
+        self.assertIs(body["requested"]["substring"], False)
+        self.assertEqual(body["data"]["queried"], "citt")
+        self.assertEqual(body["data"]["pos"], ["noun"])
+        self.assertEqual(
+            body["data"]["matches"],
+            ["città", "città santa", "città sante", "città stato", "città vecchia"],
+        )

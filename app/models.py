@@ -144,6 +144,39 @@ class DefineResponse(BaseModel):
     data: DefinitionResponse | None = None
 
 
+# ---- Autocomplete (/complete) models ----
+class CompleteQuery(BaseModel):
+    q: constr(min_length=1) = Field(..., description="Partial word to complete")
+    pos: list[str] | None = Field(
+        None,
+        description=(
+            "Restrict to these parts of speech, e.g. verb or noun. Values are "
+            "case-sensitive and match the dictionary's POS names. Omitted means "
+            "every part of speech."
+        ),
+    )
+    limit: int = Field(20, description="Maximum completions; clamped to 1-100")
+    substring: bool = Field(
+        False, description="If true, match anywhere in the word instead of as a prefix"
+    )
+
+
+class CompletionData(BaseModel):
+    queried: str = Field(..., description="The q that was searched for, verbatim")
+    pos: list[str] | None = Field(
+        None, description="The POS filter actually applied; null when every POS was searched"
+    )
+    matches: list[str] = Field(..., description="Completing words, alphabetically")
+
+
+class CompleteResponse(BaseModel):
+    success: bool
+    requested: CompleteQuery | None = None
+    note: str | None = None
+    error: str | None = None
+    data: CompletionData | None = None
+
+
 class HealthResponse(BaseModel):
     ok: bool
     databases: dict[str, bool] = Field(

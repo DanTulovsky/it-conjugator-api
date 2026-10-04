@@ -199,6 +199,102 @@
           }
         }
       }
+    },
+    "/complete": {
+      "get": {
+        "tags": [
+          "dictionary"
+        ],
+        "summary": "Prefix-complete an Italian word",
+        "description": "Return dictionary words beginning with ``q``, for autocomplete.\n\nMatching ignores case and accents, so ``citta`` finds ``città``. Pass ``pos``\nto restrict to parts of speech — a conjugation client wants ``pos=verb``.\nWith ``substring=true`` ``q`` may appear anywhere in the word.\n\nAn unmatched prefix is not an error: the response is HTTP 200 with\n``success: true`` and an empty ``matches`` list.",
+        "operationId": "complete_complete_get",
+        "security": [
+          {
+            "X-API-Key": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Partial word to complete",
+              "title": "Q"
+            },
+            "description": "Partial word to complete"
+          },
+          {
+            "name": "pos",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "CSV of parts of speech to restrict to (e.g. verb,noun); omitted = all",
+              "title": "Pos"
+            },
+            "description": "CSV of parts of speech to restrict to (e.g. verb,noun); omitted = all"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "description": "Maximum completions, clamped to 1-100",
+              "default": 20,
+              "title": "Limit"
+            },
+            "description": "Maximum completions, clamped to 1-100"
+          },
+          {
+            "name": "substring",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "If true, match anywhere in the word instead of as a prefix",
+              "default": false,
+              "title": "Substring"
+            },
+            "description": "If true, match anywhere in the word instead of as a prefix"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompleteResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or missing X-API-Key"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -257,6 +353,141 @@
           "success"
         ],
         "title": "APIResponse"
+      },
+      "CompleteQuery": {
+        "properties": {
+          "q": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Q",
+            "description": "Partial word to complete"
+          },
+          "pos": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pos",
+            "description": "Restrict to these parts of speech, e.g. verb or noun. Values are case-sensitive and match the dictionary's POS names. Omitted means every part of speech."
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit",
+            "description": "Maximum completions; clamped to 1-100",
+            "default": 20
+          },
+          "substring": {
+            "type": "boolean",
+            "title": "Substring",
+            "description": "If true, match anywhere in the word instead of as a prefix",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "q"
+        ],
+        "title": "CompleteQuery"
+      },
+      "CompleteResponse": {
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "title": "Success"
+          },
+          "requested": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CompleteQuery"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CompletionData"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "success"
+        ],
+        "title": "CompleteResponse"
+      },
+      "CompletionData": {
+        "properties": {
+          "queried": {
+            "type": "string",
+            "title": "Queried",
+            "description": "The q that was searched for, verbatim"
+          },
+          "pos": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pos",
+            "description": "The POS filter actually applied; null when every POS was searched"
+          },
+          "matches": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Matches",
+            "description": "Completing words, alphabetically"
+          }
+        },
+        "type": "object",
+        "required": [
+          "queried",
+          "matches"
+        ],
+        "title": "CompletionData"
       },
       "ConjugateQuery": {
         "properties": {
