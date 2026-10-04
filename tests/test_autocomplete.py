@@ -226,7 +226,18 @@ class TestCompleteEndpoint(unittest.TestCase):
     def test_rejects_a_blank_query(self):
         import json
 
-        resp = api.complete(q="   ", api_key=api.API_KEY)
+        # The blank check must run BEFORE the index is consulted: a blank `q`
+        # must be a 400 even if the index cannot be built at all.
+        def _must_not_be_called():
+            raise AssertionError("ensure_index must not run for a blank q")
+
+        original = api.autocomplete_core.ensure_index
+        api.autocomplete_core.ensure_index = _must_not_be_called
+        try:
+            resp = api.complete(q="   ", api_key=api.API_KEY)
+        finally:
+            api.autocomplete_core.ensure_index = original
+
         self.assertEqual(resp.status_code, 400)
         self.assertIn("'q'", json.loads(resp.body)["error"])
 

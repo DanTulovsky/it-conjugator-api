@@ -275,8 +275,6 @@ def complete(
     if not API_KEY or api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key")
 
-    index = autocomplete_core.ensure_index()
-
     query = q.strip()
     if not query:
         return JSONResponse(
@@ -285,6 +283,8 @@ def complete(
                 success=False, error="Parameter 'q' must not be empty."
             ).model_dump(),
         )
+
+    index = autocomplete_core.ensure_index()
 
     pos_list = _csv_to_list(pos)
     unknown = [p for p in (pos_list or []) if p not in index.buckets]
