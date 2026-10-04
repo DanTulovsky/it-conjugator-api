@@ -15,7 +15,8 @@ prebuilt artifact, no `Taskfile` task, no `Dockerfile` line. `app/api.py` expose
 it as `/complete` behind the existing `X-API-Key` gate.
 
 **Tech Stack:** Python 3.12, FastAPI 0.115.0, pydantic, stdlib `sqlite3` /
-`bisect` / `heapq`, stdlib `unittest`. No new dependencies.
+`bisect` / `heapq`, stdlib `unittest`, and `fastapi.testclient` (needs `httpx`,
+added to `requirements.txt` in Task 3 as the one test-only dependency).
 
 **Spec:** `docs/superpowers/specs/2026-10-04-autocomplete-design.md`
 
