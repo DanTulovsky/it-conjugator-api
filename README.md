@@ -138,9 +138,9 @@ you expose this publicly.
 
 All three data endpoints return **HTTP 200** for a well-formed request even when the
 result is empty — a not-found word is **not** a 404. Branch on the `success`
-field (see [Error handling](#error-handling)). (`/complete` always reports
-`success: true`; an unmatched prefix is signalled by an empty `matches` list
-and a `note`, not by `success: false`.)
+field (see [Error handling](#error-handling)). (On a well-formed request
+`/complete` always reports `success: true`; an unmatched prefix is signalled by
+an empty `matches` list and a `note`, not by `success: false`.)
 
 ### `GET /conjugate`
 
