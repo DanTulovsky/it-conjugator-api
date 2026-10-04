@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from contextlib import asynccontextmanager
+from typing import Annotated
 
 from fastapi import FastAPI, HTTPException, Query, Security
 from fastapi.responses import JSONResponse
@@ -248,16 +249,19 @@ def define(
     responses={401: {"description": "Invalid or missing X-API-Key"}},
 )
 def complete(
-    q: str = Query(..., min_length=1, description="Partial word to complete"),
-    pos: str | None = Query(
-        None,
-        description="CSV of parts of speech to restrict to (e.g. verb,noun); omitted = all",
-    ),
-    limit: int = Query(20, description="Maximum completions, clamped to 1-100"),
-    substring: bool = Query(
-        False, description="If true, match anywhere in the word instead of as a prefix"
-    ),
-    api_key: str | None = Security(api_key_header),
+    q: Annotated[str, Query(min_length=1, description="Partial word to complete")],
+    pos: Annotated[
+        str | None,
+        Query(
+            description="CSV of parts of speech to restrict to (e.g. verb,noun); omitted = all"
+        ),
+    ] = None,
+    limit: Annotated[int, Query(description="Maximum completions, clamped to 1-100")] = 20,
+    substring: Annotated[
+        bool,
+        Query(description="If true, match anywhere in the word instead of as a prefix"),
+    ] = False,
+    api_key: Annotated[str | None, Security(api_key_header)] = None,
 ):
     """Return dictionary words beginning with ``q``, for autocomplete.
 
@@ -270,14 +274,6 @@ def complete(
     """
     if not API_KEY or api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key")
-
-    # A direct Python call (which the unit tests make) does not run FastAPI's
-    # dependency machinery, so the ``Query(...)`` defaults arrive as the
-    # parameter objects rather than their values. HTTP requests always deliver
-    # real values. Fall back to the declared defaults so both paths behave the
-    # same.
-    limit = getattr(limit, "default", limit)
-    substring = getattr(substring, "default", substring)
 
     index = autocomplete_core.ensure_index()
 
