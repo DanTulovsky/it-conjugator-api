@@ -308,7 +308,7 @@ curl -H "X-API-Key: $KEY" "$API/complete?q=citt&pos=noun&limit=5"
   "data": {
     "queried": "citt",
     "pos": ["noun"],
-    "matches": ["città", "città santa", "città sante", "città stato", "città vecchia"]
+    "matches": ["città", "cittì", "citto", "cittade", "cittadi"]
   }
 }
 ```
@@ -320,14 +320,26 @@ part-of-speech bucket — the whole index when no `pos` is given — about 10 ms
 the worst case (versus tens of microseconds for a prefix), so use it on
 explicit request only.
 
-**Verb infinitives come first.** For `q=mang&pos=verb` the results lead with the
-infinitives that start that way — `manganare`, `manganellare`, `mangiare`, … —
-before any inflected form, so `mangiare` lands 3rd rather than 37th. Within each
-group, results are alphabetical ignoring case and accents, and inflected forms
-are still returned in full: they simply follow the infinitives. Only the verb
-bucket is ordered this way, and reflexive infinitives count too (`pentirsi`,
-`accorgersi`, `lavarsi`) — for inherently-pronominal verbs like `pentirsi` the
-reflexive *is* the dictionary form.
+**Verb infinitives come first, then the closest word.** For `q=mang&pos=verb`
+the results lead with the infinitives that start that way, before any inflected
+form, so `mangiare` is inside a default-sized window rather than 37th behind
+`mangiai`, `mangiammo` and the rest. Within the infinitive group the *shortest*
+word comes first — every match shares the typed prefix, so the shortest is the
+closest completion. That is what puts `parlare` ahead of `parlamentare` and
+`parlamentizzare` for `q=parl`, and `mangiare` ahead of `manganellare` for
+`q=mang`. The inflected group follows, alphabetical ignoring case and accents,
+and inflected forms are still returned in full. Only the verb bucket is split
+this way, and reflexive infinitives count too (`pentirsi`, `accorgersi`,
+`lavarsi`) — for inherently-pronominal verbs like `pentirsi` the reflexive *is*
+the dictionary form.
+
+**Single words come before compound phrases.** An entry containing a space
+(`città santa`, `mangiare la polvere`, `man mano`) is demoted below every
+single-word match, in both groups, for every part of speech. A client typing a
+prefix almost always wants the single word; without this, `q=citt&pos=noun` led
+with `città santa`, `città sante`, … ahead of `città` itself. Compounds remain
+reachable — they simply follow the single words.
+
 Wiktionary gives gerunds and clitic-object verbs (`abbacchiandoci`, `mangiarla`)
 their own entries and marks them as lemmas, so "lemma first" would not have been
 enough to surface the infinitive — it takes the infinitive ending.

@@ -130,10 +130,37 @@ of `aprire`), which `-ersi` alone would have caught. The cost is the 132 reflexi
 keys Wiktionary records as pure forms rather than lemmas — `ricordarsi` among
 them — which stay in the inflected half.
 
-Only the **verb** bucket is split. Every other POS keeps plain alphabetical
-order, because only verbs have a canonical form a client must be able to reach.
+Only the **verb** bucket is split. Every other POS keeps its keys in one half,
+because only verbs have a canonical form a client must be able to reach.
 The two halves are kept disjoint (a key that is both a lemma and a form lands in
 the canonical half) so `count()` still reports distinct `(word, pos)` keys.
+
+### Revision: closest-word and single-word-first ordering
+
+Two later revisions refined the within-half order, both requested after
+inspection of real output:
+
+- **Shortest-first.** Within the canonical half, shorter keys now precede longer
+  ones (then alphabetical). Every match for a prefix shares that prefix, so the
+  shortest is the completion that adds the fewest characters. That is what makes
+  `q=parl&pos=verb` lead with `parlare` rather than `parlamentare` and
+  `parlamentizzare`, which the old pure-alphabetical canonical order put first
+  (`m` < `r` at the fifth character). Because the canonical half is no longer
+  plain-alphabetical, its keys are grouped into runs of equal length
+  (`Index._spans`) and each run is bisected separately; `heapq.merge` merges the
+  multi-POS case on the same order.
+- **Single words before compounds.** An entry containing a space (`città santa`,
+  `mangiare la polvere`, `man mano`) is now demoted below every single-word match
+  in **both** halves and for every POS. This is the outer term of each half's
+  order key. It applies to the inflected half too, so that half is also banded
+  (single-word run, then compound run) and uses the same span walk. It fixed
+  `q=citt&pos=noun`, which had led with `città santa`, `città sante`, … ahead of
+  `città` itself.
+
+The two halves' order keys are `(compound rank, length, key)` for canonical and
+`(compound rank, key)` for inflected. Ordering and the canonical/other
+disjointness live in `Index.__init__`, so a hand-built index and a built one
+behave identically.
 
 There is deliberately no separate "all words" bucket. A request without `pos`
 k-way merges the 23 buckets with `heapq.merge` and dedups while filling the
@@ -261,7 +288,9 @@ the project's one test-only dependency; `app/` never imports it.
 
 1. **Fold** — `città` → `citta`, `però` → `pero`, `CANE` → `cane`; idempotent.
 2. **Prefix, one POS** — `man` + `pos=verb` returns only verbs, respecting
-   `limit`; canonical forms precede inflected ones, each group alphabetical.
+   `limit`; canonical forms precede inflected ones, single words precede
+   compounds, and each group is ordered by its half's key (canonical:
+   shortest-first; inflected: alphabetical).
 3. **Prefix, no POS** — results are sorted, deduped across buckets, and
    truncated to `limit`.
 4. **POS filter** — the same query with `pos=noun` returns only nouns; a word
@@ -297,11 +326,14 @@ index or query changes.
 
 Each with its ceiling and the upgrade path if it is ever hit:
 
-- **Ranking is canonical-first only.** Verb infinitives lead their bucket, then
-  everything alphabetical. There is no frequency data, no per-word popularity,
-  and no lemma-first ordering for other parts of speech. This was revised after
-  measurement showed the original "no ranking" plan left `mangiare` 37th for the
-  prefix `mang`, and that `is_lemma`-based ordering would not have fixed it.
+- **Ranking is canonical-first plus two ordering terms.** Verb infinitives lead
+  their bucket, then everything by single-word rank and (for canonical forms)
+  length. There is no frequency data, no per-word popularity, and no lemma-first
+  ordering for other parts of speech. This was revised after measurement showed
+  the original "no ranking" plan left `mangiare` 37th for the prefix `mang`,
+  that `is_lemma`-based ordering would not have fixed it, that pure-alphabetical
+  canonical order put `parlamentare` ahead of `parlare` for `parl`, and that
+  alphabetical order put `città santa` ahead of `città` for `citt`.
 - **No substring index.** A linear scan (10.5 ms worst case) stands in for a
   trigram or suffix-array index. Build one if substring becomes the common path.
 - **No prebuilt index file.** ~0.8 s of startup is cheaper than an artifact to

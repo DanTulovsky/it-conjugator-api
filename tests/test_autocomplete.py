@@ -24,7 +24,13 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from app import autocomplete_core, dictionary_core  # noqa: E402
-from app.autocomplete_core import Index, _is_canonical, fold  # noqa: E402
+from app.autocomplete_core import (  # noqa: E402
+    Index,
+    _canonical_order,
+    _inflected_order,
+    _is_canonical,
+    fold,
+)
 
 # The API key is read from the environment at import time; set it before we
 # import app.api so the endpoints accept our test key.
@@ -43,8 +49,8 @@ def _tiny_index():
     override to ``città``; ``cane`` is deliberately in two POS buckets so the
     cross-bucket dedup path is exercised.
 
-    Every key sits in its bucket's *canonical* half, so these tests pin plain
-    alphabetical order within a group. :func:`_ranked_index` covers the
+    Every key sits in its bucket's *canonical* half, so these tests pin the
+    canonical half's shortest-first order. :func:`_ranked_index` covers the
     canonical / inflected split.
     """
     return Index(
@@ -78,6 +84,26 @@ def _ranked_index():
     )
 
 
+def _compound_index():
+    """An index mixing single words and compound phrases (entries with a space).
+
+    ``città`` is a single noun; ``città santa`` and ``città vecchia`` are
+    compounds that sort *before* it alphabetically. Single words must lead
+    regardless, in both halves — ``mangiare`` before ``mangiare la polvere``, and
+    the inflected ``mangia`` before ``mangia la mela``.
+    """
+    return Index(
+        buckets={
+            "verb": (
+                sorted(["mangiare", "mangiare la polvere"]),
+                sorted(["mangia", "mangia la mela"]),
+            ),
+            "noun": (sorted(["città", "città santa", "città vecchia"]), []),
+        },
+        overrides={},
+    )
+
+
 class TestCanonicalForm(unittest.TestCase):
     """Canonical forms (verb infinitives) must be offered before inflected ones."""
 
@@ -104,10 +130,11 @@ class TestCanonicalForm(unittest.TestCase):
             self.assertIn(form, full)
 
     def test_canonical_precedes_inflected_across_a_multi_pos_merge(self):
-        # Both `mancanza` (noun) and `mancare` (verb) are canonical, so they are
-        # merged alphabetically ahead of the inflected `mancai` — even though
-        # `mancai` sorts between them alphabetically.
-        self.assertEqual(self.index.complete("manc"), ["mancanza", "mancare", "mancai"])
+        # Both `mancare` (verb) and `mancanza` (noun) are canonical, so they are
+        # merged ahead of the inflected `mancai` — even though `mancai` sorts
+        # between them alphabetically. `mancare` (7) precedes `mancanza` (8)
+        # under the canonical half's shortest-first order.
+        self.assertEqual(self.index.complete("manc"), ["mancare", "mancanza", "mancai"])
         self.assertEqual(self.index.complete("manc", pos=["verb"]), ["mancare", "mancai"])
 
     def test_substring_respects_canonical_first(self):
@@ -126,6 +153,45 @@ class TestCanonicalForm(unittest.TestCase):
 
     def test_non_verb_buckets_are_not_split(self):
         self.assertEqual(_tiny_index().complete("citt", pos=["noun"]), ["città", "cittadino"])
+
+
+class TestCompoundOrdering(unittest.TestCase):
+    """Compound phrases (entries containing a space) sort below single words."""
+
+    def setUp(self):
+        self.index = _compound_index()
+
+    def test_single_word_precedes_compounds_in_the_canonical_half(self):
+        # `città santa` and `città vecchia` sort before `città` alphabetically,
+        # but the single word must lead.
+        self.assertEqual(
+            self.index.complete("citt", pos=["noun"]),
+            ["città", "città santa", "città vecchia"],
+        )
+
+    def test_single_word_precedes_compound_across_pos(self):
+        self.assertEqual(
+            self.index.complete("citt"),
+            ["città", "città santa", "città vecchia"],
+        )
+
+    def test_canonical_single_word_precedes_canonical_compound(self):
+        self.assertEqual(
+            self.index.complete("mang", pos=["verb"], limit=2),
+            ["mangiare", "mangiare la polvere"],
+        )
+
+    def test_inflected_single_word_precedes_inflected_compound(self):
+        # `mangia la mela` sorts before `mangia` alphabetically; it must not.
+        self.assertEqual(
+            self.index.complete("mang", pos=["verb"]),
+            ["mangiare", "mangiare la polvere", "mangia", "mangia la mela"],
+        )
+
+    def test_compounds_are_still_reachable(self):
+        words = self.index.complete("citt", pos=["noun"], limit=100)
+        for compound in ("città santa", "città vecchia"):
+            self.assertIn(compound, words)
 
 
 class TestIsCanonical(unittest.TestCase):
@@ -217,8 +283,9 @@ class TestIndexPrefix(unittest.TestCase):
         self.assertEqual(self.index.complete("citt"), ["città", "cittadino"])
 
     def test_prefix_with_no_pos_merges_and_sorts_across_buckets(self):
-        # `mancanza` (noun) sorts before `mancare` (verb) by folded key.
-        self.assertEqual(self.index.complete("manc"), ["mancanza", "mancare"])
+        # `mancare` (7) precedes `mancanza` (8): the canonical half is
+        # shortest-first, and both are canonical, so length decides.
+        self.assertEqual(self.index.complete("manc"), ["mancare", "mancanza"])
 
     def test_merges_across_buckets_and_dedupes_a_word_with_two_pos(self):
         # `cane` is in both buckets; it must appear once.
@@ -263,7 +330,7 @@ class TestIndexSubstring(unittest.TestCase):
 
     def test_substring_searches_every_bucket_by_default(self):
         self.assertEqual(
-            self.index.complete("anc", substring=True), ["mancanza", "mancare"]
+            self.index.complete("anc", substring=True), ["mancare", "mancanza"]
         )
 
     def test_substring_respects_pos(self):
@@ -327,14 +394,14 @@ class TestIndexCaching(unittest.TestCase):
         self.assertGreater(stats["keys"], 600_000)
 
     @unittest.skipUnless(REPO_HAS_DICTIONARY, "dictionary.db not built — run `task db:dictionary`")
-    def test_every_bucket_is_split_into_disjoint_sorted_halves(self):
+    def test_every_bucket_is_split_into_disjoint_ordered_halves(self):
         # The invariant that keeps `count()` equal to the number of distinct
         # (word, pos) keys: a key that is both a lemma and a form would otherwise
-        # land in both halves.
+        # land in both halves. Each half is deduped and sorted by its own order.
         index = autocomplete_core.ensure_index()
         for pos, (canonical, other) in index.buckets.items():
-            self.assertEqual(canonical, sorted(set(canonical)), pos)
-            self.assertEqual(other, sorted(set(other)), pos)
+            self.assertEqual(canonical, sorted(set(canonical), key=_canonical_order), pos)
+            self.assertEqual(other, sorted(set(other), key=_inflected_order), pos)
             self.assertFalse(set(canonical) & set(other), f"{pos} halves overlap")
         self.assertLessEqual(index.count(), 611_169)
 
@@ -399,10 +466,11 @@ class TestCompleteEndpoint(unittest.TestCase):
         self.assertTrue(all(fold(w).startswith("mangiare") for w in resp.data.matches))
 
     @unittest.skipUnless(REPO_HAS_DICTIONARY, "dictionary.db not built — run `task db:dictionary`")
-    def test_results_are_canonical_first_then_alphabetical(self):
-        # The documented ordering: verb infinitives first, then inflected forms
-        # (each group alphabetical by folded key). This pins it, so any future
-        # ranking change is a deliberate test change rather than a silent one.
+    def test_results_are_canonical_first_then_ranked(self):
+        # The documented ordering: verb infinitives first, then inflected forms.
+        # Within each group single words precede compounds; the canonical group
+        # is shortest-first, the inflected group alphabetical. This pins it, so
+        # any future ranking change is a deliberate test change.
         matches = api.complete(q="mang", pos="verb", limit=100, api_key=api.API_KEY)
         words = matches.data.matches
         self.assertEqual(len(words), 100)
@@ -411,10 +479,13 @@ class TestCompleteEndpoint(unittest.TestCase):
         flags = [fold(w) in canonical for w in words]
         # Once an inflected form appears, no canonical form may follow it.
         self.assertEqual(flags, sorted(flags, reverse=True))
-        # Each group is alphabetical.
-        for wanted in (True, False):
+        # Each group is ordered by its half's key (single-word-first, and for
+        # canonical forms shortest-first), and single words precede compounds.
+        for wanted, order in ((True, _canonical_order), (False, _inflected_order)):
             keys = [fold(w) for w, is_canonical in zip(words, flags) if is_canonical is wanted]
-            self.assertEqual(keys, sorted(keys))
+            self.assertEqual(keys, sorted(keys, key=order))
+            ranks = [0 if " " not in k else 1 for k in keys]
+            self.assertEqual(ranks, sorted(ranks))
 
     @unittest.skipUnless(REPO_HAS_DICTIONARY, "dictionary.db not built — run `task db:dictionary`")
     def test_the_infinitive_surfaces_for_the_prefix_a_client_types(self):
@@ -569,7 +640,7 @@ class TestCompleteHTTP(unittest.TestCase):
         self.assertEqual(body["data"]["pos"], ["noun"])
         self.assertEqual(
             body["data"]["matches"],
-            ["città", "città santa", "città sante", "città stato", "città vecchia"],
+            ["città", "cittì", "citto", "cittade", "cittadi"],
         )
 
 
